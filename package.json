@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "version": "0.0.0",
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "dev": "astro dev --port 5400",
     "build": "astro build",
