@@ -1,0 +1,162 @@
+---
+title: Write a test
+description: Write a unit test, an integration test against the dev Postgres with kit/testkit, an end-to-end test and a web app logic test, with real examples.
+sidebar:
+  order: 6
+---
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+**What you'll learn:** which kind of test to write for your change, and a real example of each one to copy.
+
+For the list of suites and the settings they read, see [Testing](/docs/developers/testing/).
+
+## Pick the kind of test
+
+| You changed... | Write |
+|---|---|
+| A rule in `domain/`, or a use case | A unit test with fakes |
+| A SQL query, a migration, an RLS policy, an event handler | An integration test with `kit/testkit` |
+| A whole flow across modules (sign-in, send and receive mail) | An end-to-end test in the service's `test/` folder |
+| Logic in a web app (date math, recurrence text) | A `node --test` test, for example in `calendar/web/test/` |
+
+## Unit test
+
+Table-driven, no database, no mocking library. This one checks email address parsing:
+
+```go title="auth/internal/directory/domain/email_test.go"
+func TestParseEmailAddress(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    string
+		display string
+		ok      bool
+	}{
+		{"alice@example.com", "alice@example.com", "alice@example.com", true},
+		{"  Alice.Smith@Example.COM ", "alice.smith@example.com", "alice.smith@example.com", true},
+		{"", "", "", false},
+		{"Alice <alice@example.com>", "", "", false},
+		// ...
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			a, err := ParseEmailAddress(tt.in)
+			// ...
+		})
+	}
+}
+```
+
+```sh
+go test ./auth/internal/directory/domain/ -run TestParseEmailAddress -count=1
+```
+
+```text title="Output"
+ok  	github.com/Suitehive/auth/internal/directory/domain	1.443s
+```
+
+Use `testkit.NewFakeClock` and `testkit.NewSeqIDs` when the code under test needs a clock or IDs. Never call `time.Sleep`.
+
+## Integration test with the dev Postgres
+
+`testkit.NewDatabase(t, sources...)` creates a fresh database `suitehive_test_<random>` on the dev Postgres, applies the migration sources you pass, and drops it when the test ends. `PoolAs` opens a connection pool as another role, so you can test as a non-superuser and RLS applies.
+
+This test from kit proves one org cannot see or write another org's rows:
+
+```go title="kit/db/tx_test.go"
+func TestRLSTenantIsolation(t *testing.T) {
+	tdb := setup(t)
+	// Roles are cluster-wide; create idempotently (parallel test packages may race).
+	tdb.Exec(t, `DO $$ BEGIN CREATE ROLE suitehive_test_app NOLOGIN;
+		EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$`)
+	tdb.Exec(t, db.RLSPolicySQL("items"))
+	tdb.Exec(t, `GRANT SELECT, INSERT ON items TO suitehive_test_app`)
+	// ...
+	appPool := tdb.PoolAs(t, "suitehive_test_app")
+	r := db.NewRunner(appPool)
+	// ...
+	// Tenant A cannot insert a row for tenant B (policy WITH CHECK defaults to USING).
+	err := r.WithinTx(kernel.WithOrg(context.Background(), orgA), func(ctx context.Context) error {
+		_, err := db.Q(ctx, appPool).Exec(ctx, `INSERT INTO items (org_id, name) VALUES ($1,'evil')`, orgB)
+		return err
+	})
+	if err == nil {
+		t.Fatal("cross-tenant insert must fail")
+	}
+}
+```
+
+In a service, pass the kit sources you need and the service's own migrations. Mail's mailbox tests do it like this:
+
+```go title="mail/internal/mailbox/module_test.go"
+tdb := testkit.NewDatabase(t, outbox.Migrations, migrate.Source{Name: "mail", FS: migrations.FS, Dir: "."})
+```
+
+Run with the `REQUIRE` switch, so a stopped Postgres fails the test instead of skipping it:
+
+<Tabs syncKey="os">
+<TabItem label="macOS / Linux">
+
+```sh
+SH_TEST_REQUIRE_DB=1 go test ./kit/db/ -run TestRLSTenantIsolation -count=1 -v
+```
+
+</TabItem>
+<TabItem label="Windows (PowerShell)">
+
+```powershell
+$env:SH_TEST_REQUIRE_DB = '1'
+go test ./kit/db/ -run TestRLSTenantIsolation -count=1 -v
+```
+
+</TabItem>
+</Tabs>
+
+```text title="Output"
+--- PASS: TestRLSTenantIsolation (0.13s)
+PASS
+ok  	github.com/Suitehive/kit/db	2.902s
+```
+
+For event handlers, `testkit.NewJetStream(t)` connects to the dev NATS, and `testkit.UniqueName("x")` gives per-test stream and handler names.
+
+## End-to-end test
+
+End-to-end suites start a whole service in the test process, the same way `main.go` does, and talk to it over HTTP.
+
+- **Auth:** `auth/test/e2e` boots the real composition root (`bootFull` in `wiring_full_test.go`) with a fake clock and captured email. Add a file next to `login_test.go` and reuse the harness.
+- **Mail:** `mail/internal/webmail/webmail_test.go` drives the REST API through the real router; `mail/test/smtpe2e` covers SMTP.
+- **Calendar:** `calendar/test/e2e`, plus `test/interop` (calendar files from other products) and `test/recurrence`.
+
+```sh
+go test ./mail/internal/webmail/ -run TestLabels -count=1
+```
+
+## Web app logic test
+
+The Calendar web app runs plain TypeScript tests with Node's built-in test runner:
+
+```ts title="calendar/web/test/rrule.test.ts"
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import { formatRRule, parseRRule, presetOf, recurrencePresets, rruleToText } from '../src/entities/rrule.ts';
+
+describe('rruleToText', () => {
+  it('describes simple frequencies', () => {
+    assert.equal(rruleToText('FREQ=DAILY'), 'Daily');
+    assert.equal(rruleToText('FREQ=DAILY;INTERVAL=3'), 'Every 3 days');
+  });
+});
+```
+
+```sh
+npm test -w calendar/web
+```
+
+<Aside type="note" title="Not available yet">
+There are no browser end-to-end tests (Playwright) or component tests for the web apps yet. Keep logic in plain functions so it can be tested with `node --test`.
+</Aside>
+
+## Next steps
+
+- [Testing reference](/docs/developers/testing/)
+- [Debug a service](/docs/developers/recipes/debugging/)

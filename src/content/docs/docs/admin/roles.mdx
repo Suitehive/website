@@ -1,0 +1,80 @@
+---
+title: Roles and permissions
+description: The built-in admin roles, the full permission list, custom roles, and the rules that stop privilege escalation.
+sidebar:
+  order: 5
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** what each built-in role can do, which permissions exist, how to create a custom role, and the safety rules around roles.
+
+Open **Admin › Access › Roles** (`/admin/roles`). The page shows a permission matrix: one column per role, rows grouped by service.
+
+## Built-in roles
+
+| Role | Permissions | Typical use |
+|---|---|---|
+| `owner` | Everything (`*`) | The organization's owners. Only owners can make or remove other owners. |
+| `admin` | Everything (`*`) | Full admins. Can't grant or revoke `owner`. |
+| `user_admin` | `auth.user.*`, `auth.group.*`, `auth.role.read` | Manages people and groups |
+| `helpdesk` | `auth.user.read`, `auth.user.reset_password`, `auth.user.reset_mfa`, `auth.group.read` | Helps people who are locked out |
+| `member` | None | Everyone else: uses the apps they're given |
+
+Built-in roles can't be changed or deleted. Only the four admin roles (`owner`, `admin`, `user_admin`, `helpdesk`) can open the admin console.
+
+## Permissions
+
+Each app contributes its own permissions to the catalog.
+
+| Permission | Allows |
+|---|---|
+| `auth.user.read` | View users |
+| `auth.user.create` | Invite users |
+| `auth.user.update` | Edit profiles and addresses |
+| `auth.user.suspend` | Suspend and reactivate |
+| `auth.user.delete` | Delete users |
+| `auth.user.reset_password` | Send password-reset links |
+| `auth.user.reset_mfa` | Reset 2-step verification |
+| `auth.group.read`, `auth.group.manage` | View or manage groups |
+| `auth.domain.manage` | Add, verify and remove domains |
+| `auth.role.read`, `auth.role.manage` | View or manage roles and role assignments |
+| `auth.org.manage` | Organization settings, security policies, apps, identity providers |
+| `auth.audit.read` | Read the audit log |
+| `mail.use` | Use Mail |
+| `mail.admin.queue.read`, `mail.admin.queue.manage` | View the outbound mail queue; retry deferred deliveries |
+| `mail.admin.dkim.manage` | View mail DNS guidance, rotate and retire DKIM keys |
+| `mail.admin.routing.manage` | Choose direct delivery or a smarthost |
+
+Calendar doesn't add permissions to the catalog yet. Managing rooms and resources is limited to `owner` and `admin`.
+
+## Custom roles
+
+<Steps>
+1. Click **Create role**, enter a **Name**, and optionally **Start from** an existing role to copy its permissions.
+2. Tick permissions in the matrix. A whole service can be granted with a wildcard such as `mail.*`. A role needs at least one permission and can't use `*`.
+3. Save.
+4. In the role's panel, use **Give `<role>` to** to assign it to people or groups.
+</Steps>
+
+The role menu has **Rename** and **Delete role…**. Custom role names can't reuse a built-in name and have at most 64 characters.
+
+<Aside type="note">
+Custom roles work through the API, but a person whose only admin role is a custom one can't open the admin console yet.
+</Aside>
+
+## Assign roles
+
+Assign roles from the Roles page, from a user's **Assign role** menu or **Roles** tab, or when inviting someone. Assigning needs `auth.role.manage`, which `owner` and `admin` have. Roles can go to users or to groups; every member of the group gets the role.
+
+## Safety rules
+
+- **No escalation:** you can't grant, revoke, create or edit a role that has permissions you don't hold yourself.
+- **Owners only for owner:** only an owner can grant or revoke `owner`, and only to individual users (not groups).
+- **Last owner:** the organization always keeps at least one active owner. Suspending, deleting or removing the role from the last owner is refused with "You can't do that to the last owner."
+
+Every grant and change is recorded in the [audit log](/docs/admin/audit-log/) (`auth.role.*`).
+
+## Next steps
+
+- [Security policies](/docs/admin/security-policies/)
+- [Users](/docs/admin/users/)

@@ -1,0 +1,100 @@
+---
+title: First sign-in and setup
+description: Sign in as the first admin, finish the first-run setup wizard, and turn on 2-step verification.
+sidebar:
+  order: 4
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how the first organization and admin are created, how the setup wizard works, and
+what happens the first time you sign in.
+
+## How the first admin is created
+
+On a server install, `suitehive install` creates your organization, your domain and the first admin for you.
+It prints the admin email and, if you didn't choose one with `--admin-password`, a generated password.
+That password is shown once and is never written to disk.
+
+If the installer can't finish this step (for example, Auth wasn't ready yet), it tells you to open
+`https://suite.example.com/setup` and finish in the browser instead.
+
+In local mode there is nothing to set up: a demo organization with three users already exists.
+See [Quick start](/docs/getting-started/quick-start/).
+
+## The setup wizard
+
+The wizard at `/setup` is only available until the first organization exists. It has five steps.
+
+<Steps>
+
+1. **Organization.** Enter the organization name. The short name (lowercase letters, numbers and dashes)
+   is filled in from it; you can change it.
+
+2. **Your admin account.** Enter your name, your email (the part before `@` and your domain, for example
+   `ada` and `example.com`) and a password of at least 12 characters. A strength meter checks it as you type.
+   Select **Create workspace**.
+
+3. **Domain.** The wizard shows a TXT record that proves you own the domain, with a copy button. Add it at
+   your DNS provider. The wizard checks every 10 seconds and shows the result live. You can select
+   **Verify later**.
+
+4. **Mail DNS.** The wizard lists the MX, SPF, DKIM, DMARC and autodiscovery records with a live check
+   for each one. Select **Check again** after you add them, or **I'll do this later**.
+
+5. **Done.** Links take you to Mail, Calendar and the Admin console.
+
+</Steps>
+
+You can finish the DNS steps any time later in **Admin → Domains**. See [DNS setup](/docs/getting-started/dns/).
+
+## Sign in
+
+Open `https://suite.example.com` (or `http://localhost:8080` in local mode). The address opens Mail, which
+sends you to the sign-in page.
+
+<Steps>
+
+1. Enter your email and select **Continue**. If your organization uses an external sign-in provider, you also
+   see a button such as **Continue with Google**.
+
+2. Enter your password and select **Sign in**. If Caps Lock is on, the page tells you.
+
+3. If you have 2-step verification, confirm with your passkey or the 6-digit code from your authenticator app.
+   Lost your phone? Select **Use a recovery code**.
+
+</Steps>
+
+After too many wrong passwords, the page asks you to wait and shows a countdown. Error messages never say
+whether the email or the password was wrong.
+
+Forgot your password? Select **Forgot password?** to get a reset link by email. Resetting signs you out
+on every other device.
+
+## Turn on 2-step verification
+
+New organizations require 2-step verification for admins. The first time you sign in as an admin, you're
+asked to set it up before you can continue.
+
+<Steps>
+
+1. Go to **Account → Security**.
+
+2. Add a passkey, or select **Set up** next to **Authenticator app** and scan the QR code.
+
+3. Save your recovery codes. Use **Download** or **Copy**, then confirm **I saved my recovery codes**.
+   You can't continue without confirming.
+
+</Steps>
+
+The demo organization in local mode does not require 2-step verification.
+
+<Aside type="tip" title="Mail and calendar apps">
+Desktop and phone apps don't use your account password. Create an app password for them. See
+[Connecting apps](/docs/user-guide/connecting-apps/).
+</Aside>
+
+## Next steps
+
+- [DNS setup](/docs/getting-started/dns/)
+- [Your account](/docs/user-guide/account/)
+- [Admin overview](/docs/admin/overview/)

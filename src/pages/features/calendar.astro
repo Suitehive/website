@@ -1,0 +1,33 @@
+---
+import FeaturePage from '../../components/site/FeaturePage.astro';
+import calWeek from '../../assets/screenshots/calendar-week.png';
+import calWeekDark from '../../assets/screenshots/calendar-week-dark.png';
+---
+<FeaturePage
+  pageTitle="Calendar"
+  description="Suitehive Calendar: day, week, month and schedule views, recurring events, invitations that work with any calendar, and CalDAV sync."
+  label="Calendar"
+  tone="butter"
+  title="Plan your week, invite anyone."
+  lead="Day, week, month and schedule views, recurring events done right, and invitations that people on Gmail, Outlook and Apple Calendar can answer."
+  shots={[
+    { light: calWeek, dark: calWeekDark, url: 'suite.example.com/calendar', alt: 'Calendar week view for October 12 to 18 with daily stand-ups, a recurring yoga session and a design review', caption: 'The week view, with the current time marked on today.' },
+  ]}
+  caps={[
+    { title: 'Every view you need', body: 'Day, week, month and schedule views. Drag events to move them and drag the edge to resize.' },
+    { title: 'Recurring events', body: 'Repeat rules in plain language. Change one occurrence, this and following, or the whole series.' },
+    { title: 'Time zones that hold up', body: 'Events keep their time zone, including on days when the clocks change.' },
+    { title: 'Invitations and RSVPs', body: 'Invites travel as standard iCalendar email, so guests outside your team can accept or decline from their own calendar.' },
+    { title: 'Find a time and rooms', body: 'See when people are free, pick a slot that works, and find a meeting room.' },
+    { title: 'Sharing and reminders', body: 'Share each calendar with free/busy only, full details, edit or manage access. Set reminders per event.' },
+  ]}
+  standards={[
+    { name: 'CalDAV', detail: 'Sync with phone and desktop calendar apps, with autodiscovery through DNS.' },
+    { name: 'iCalendar', detail: 'Invitations work with Gmail, Outlook and Apple Calendar. Import and export <code>.ics</code> files.' },
+  ]}
+  docs={[
+    { href: '/docs/user-guide/calendar/overview/', label: 'Calendar user guide' },
+    { href: '/docs/user-guide/calendar/invitations/', label: 'Invitations and RSVPs' },
+    { href: '/docs/user-guide/connecting-apps/', label: 'Connect a calendar app' },
+  ]}
+/>

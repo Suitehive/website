@@ -1,0 +1,79 @@
+---
+title: Smarthost relay
+description: Send outgoing mail through a relay provider when your server can't deliver directly on port 25.
+sidebar:
+  order: 7
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** when you need a smarthost, how outgoing mail routing works in Suitehive, and what you can configure today.
+
+## When you need one
+
+By default Mail delivers outgoing mail itself: it looks up each recipient domain's MX record and connects on port 25 ("direct" mode). That fails when:
+
+- your cloud provider blocks outbound port 25 (many do by default);
+- your server's IP address has a poor reputation, so big providers reject or spam-folder its mail;
+- you can't set reverse DNS (PTR) for the server's IP.
+
+A smarthost is an SMTP relay (your provider's relay or a transactional mail service) that accepts your mail on port 587 or 465 with a username and password and delivers it for you.
+
+<Aside type="tip" title="Try direct delivery first">
+Ask your provider to open outbound port 25 and set the PTR record of your server's IP to your Suitehive hostname. With SPF, DKIM and DMARC in place, direct delivery often works well.
+</Aside>
+
+## How routing is decided
+
+Two settings combine:
+
+| Setting | Where | Values |
+|---|---|---|
+| `SH_OUTBOUND_MODE` | Mail's environment | `direct` (default), `smarthost`, `local-only` |
+| Outbound routing | Per organization, stored in Mail's database | `direct` or `smarthost`, with relay details |
+
+`local-only` always wins: nothing leaves the server. It is the default with `SH_DEV_SEED=true`, so a local trial never sends real mail. Otherwise the organization's routing decides. A smarthost is used only when the organization's routing has a relay host; without one, Mail delivers directly.
+
+In direct mode Mail uses STARTTLS when the receiving server offers it and honors the recipient domain's MTA-STS policy. With "require TLS" turned on, it never falls back to plaintext.
+
+## Organization routing settings
+
+| Field | Default | Description |
+|---|---|---|
+| `mode` | `direct` | `direct` or `smarthost` |
+| `smarthostHost` | | Relay host name. Required for `smarthost`. |
+| `smarthostPort` | `587` | Relay port |
+| `smarthostTls` | `starttls` | `starttls` (fails if the relay doesn't offer it), `tls` (implicit TLS, usually port 465) or `none` |
+| `smarthostUsername` | | Login name, if the relay needs one (sent with SMTP AUTH PLAIN) |
+| `smarthostPassword` | | Write-only. Encrypted with `SH_MASTER_KEY`. Omit to keep the stored one; `""` clears it. |
+| `requireTls` | `false` | Direct mode only: deliver only over verified TLS |
+
+```json title="Example: relay through a provider"
+{
+  "mode": "smarthost",
+  "smarthostHost": "smtp.relay.example.net",
+  "smarthostPort": 587,
+  "smarthostTls": "starttls",
+  "smarthostUsername": "suitehive@example.com",
+  "smarthostPassword": "your-relay-password"
+}
+```
+
+<Aside type="caution" title="No admin screen yet">
+The admin console doesn't have a Mail section yet, so there is no screen for outbound routing. Today the setting is only reachable through Mail's admin API: `GET` and `PUT /api/mail/admin/outbound-routing`, which need the `mail.admin.routing.manage` permission and an access token for Mail. `PUT` requires an `If-Match` header with the `ETag` from `GET` (`"0"` the first time). Mail records each change in its own audit records as `mail.routing.update`. See the [Mail API reference](/docs/api/mail/).
+</Aside>
+
+## Auth's own email is separate
+
+Invitations and password-reset emails are sent by Auth, not through Mail's routing. Auth submits them over SMTP to `SH_EMAIL_SMTP_URL` (default `smtp://mail:587`). You can point it straight at your relay in `.env`:
+
+```sh title=".env"
+SH_EMAIL_SMTP_URL=smtp://user:password@smtp.relay.example.net:587
+SH_EMAIL_FROM="Suitehive <no-reply@example.com>"
+```
+
+Use `smtps://` for implicit TLS on port 465. URL-encode special characters in the password. Apply with `docker compose up -d` from the install directory.
+
+## Next steps
+
+- [Spam and antivirus](/docs/self-hosting/spam-and-antivirus/)
+- [Troubleshooting](/docs/self-hosting/troubleshooting/)

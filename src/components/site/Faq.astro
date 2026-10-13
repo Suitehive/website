@@ -1,0 +1,26 @@
+---
+interface Props { items: { q: string; a: string }[] }
+const { items } = Astro.props;
+---
+<div class="faq-list">
+  {items.map((it) => (
+    <details class="reveal">
+      <summary><span>{it.q}</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary>
+      <p set:html={it.a} />
+    </details>
+  ))}
+</div>
+
+<style>
+  .faq-list { border-top: 1px solid var(--line); }
+  details { border-bottom: 1px solid var(--line); }
+  summary { list-style: none; display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 22px 4px; cursor: pointer; font-weight: 600; font-size: 1.06rem; }
+  summary::-webkit-details-marker { display: none; }
+  summary svg { width: 20px; height: 20px; flex: none; color: var(--subtle); transition: transform 200ms var(--ease); }
+  details[open] summary svg { transform: rotate(45deg); }
+  summary:hover span { text-decoration: underline; text-underline-offset: 4px; text-decoration-color: var(--line-strong); }
+  p { margin: 0 4px 24px; color: var(--muted); max-width: 40rem; }
+  p :global(a) { color: var(--accent); text-underline-offset: 3px; }
+  p :global(code) { font-size: 0.86em; background: var(--paper-2); padding: 1px 6px; border-radius: 6px; }
+  @media (prefers-reduced-motion: reduce) { summary svg { transition: none; } }
+</style>

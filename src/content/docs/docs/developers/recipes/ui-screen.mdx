@@ -1,0 +1,119 @@
+---
+title: Add a UI screen
+description: Add a new page to a Suitehive web app with a file route, a feature component built from @suitehive/ui, a data hook and a sidebar link.
+sidebar:
+  order: 4
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how to add a page to a web app, using the Admin console's **Apps** page as the real example.
+
+The web apps use React 19, TanStack Router (file-based routes), TanStack Query for data, Tailwind v4, and the shared components in `@suitehive/ui`. Start the app in mock mode (`npm run dev:auth`) so you need no backend while you build.
+
+## Where things go
+
+| Path | Holds |
+|---|---|
+| `<app>/web/src/app/routes/` | One file per URL. The file path is the URL. |
+| `<app>/web/src/features/<area>/` | The page component and its pieces |
+| `<app>/web/src/shared/api/` | The API interface (`ports.ts`), live and mock implementations, and query hooks |
+| `ui/packages/ui/src/` | Shared components: `Page`, `PageHeader`, `Button`, `Table`, `EmptyState`, `Skeleton` and more |
+
+## Steps
+
+<Steps>
+
+1. **Add the route file.**
+
+   The route file only connects a URL to a component:
+
+   ```tsx title="auth/web/src/app/routes/admin/apps.tsx"
+   import { createFileRoute } from '@tanstack/react-router';
+   import { AppsPage } from '../../../features/admin/apps/apps-page';
+
+   export const Route = createFileRoute('/admin/apps')({
+     component: AppsPage,
+   });
+   ```
+
+   Do not edit `src/app/routeTree.gen.ts`. The Vite plugin regenerates it while the dev server runs, and `npm run typecheck` regenerates it with `tsr generate`.
+
+2. **Load the data with a query hook.**
+
+   Hooks call the API interface, never `fetch` directly, so the same page works in mock and live mode:
+
+   ```ts title="auth/web/src/shared/api/queries.ts"
+   export function useServices() {
+     const api = useAuthWebApi();
+     return useQuery({ queryKey: authKeys.services, queryFn: () => api.admin.org.services() });
+   }
+   ```
+
+   If the endpoint is new, add it to `ports.ts`, the live implementation and the mock first. See [Add a REST endpoint](/docs/developers/recipes/rest-endpoint/).
+
+3. **Build the page from `@suitehive/ui`.**
+
+   Every page handles four states: loading, error, empty and data. The shared components cover each one:
+
+   ```tsx title="auth/web/src/features/admin/apps/apps-page.tsx"
+   return (
+     <Page>
+       <PageHeader title="Apps" meta={services.data ? `${services.data.length} installed` : undefined} />
+       {services.isPending ? (
+         <DelayedSkeleton>
+           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+             <Skeleton className="h-48 rounded-xl" />
+             <Skeleton className="h-48 rounded-xl" />
+           </div>
+         </DelayedSkeleton>
+       ) : services.isError ? (
+         <ErrorState message={messageFor(services.error)} onRetry={() => void services.refetch()} />
+       ) : services.data.length === 0 ? (
+         <EmptyState illustration={<LayoutGrid />} title="No apps installed yet." />
+       ) : (
+         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+           {/* one FeatureCard per service */}
+         </div>
+       )}
+     </Page>
+   );
+   ```
+
+   Use the design tokens through Tailwind classes such as `text-fg-muted` and `bg-surface`, not raw colors, so light mode, dark mode and density all work.
+
+4. **Add it to the navigation.**
+
+   In the Admin console, the sidebar is a list in the frame component:
+
+   ```tsx title="auth/web/src/app/admin-frame.tsx"
+   {
+     label: 'Access',
+     items: [
+       { to: '/admin/roles', label: 'Roles', icon: <KeyRound /> },
+       { to: '/admin/security', label: 'Security policies', icon: <Shield /> },
+       { to: '/admin/apps', label: 'Apps', icon: <AppWindow /> },
+     ],
+   },
+   ```
+
+   Icons come from `lucide-react`.
+
+5. **Check it.**
+
+   ```sh
+   npm run typecheck -w auth/web
+   ```
+
+   A `<Link to="...">` is type-checked against the generated route tree, so a link to a route that does not exist fails here. The sidebar list above uses plain strings, so click the new entry once in the browser to check it.
+
+</Steps>
+
+<Aside type="tip" title="Design rules">
+The visual rules (spacing, type scale, pastel tones, motion, empty-state wording) are in `docs/design/07-ui-design-system.md`. The app structure rules are in `06-ui-architecture.md`. Read them before adding a new kind of component; most of the time an existing one in `ui/packages/ui` already fits.
+</Aside>
+
+## Next steps
+
+- [Add a right-click menu](/docs/developers/recipes/context-menu/)
+- [Add a REST endpoint](/docs/developers/recipes/rest-endpoint/)
+- [Local environment: mock or live](/docs/developers/local-environment/#web-apps-mock-or-live)

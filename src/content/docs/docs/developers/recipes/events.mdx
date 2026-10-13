@@ -1,0 +1,148 @@
+---
+title: Publish and consume an event
+description: Define a new event in contracts, publish it through the transactional outbox, and handle it in another service through the inbox.
+sidebar:
+  order: 2
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how to add an event to the contracts, publish it from a use case, and react to it in another service, with real code from Auth and Mail.
+
+Read [Events](/docs/developers/concepts/events/) first if the words outbox, relay and inbox are new to you.
+
+## Publish
+
+<Steps>
+
+1. **Define the payload.**
+
+   Add a message to the producing service's events file. Include `org_id`, the record ID, a `version` and `occurred_at`, like the existing messages. Carry IDs and metadata, never bodies or secrets.
+
+   ```protobuf title="contracts/proto/suitehive/events/mail/v1/events.proto"
+   // sh.mail.message.received.v1 (a message was stored in a local mailbox)
+   message MessageReceived {
+     string org_id = 1;
+     string message_id = 2;
+     int64 version = 3;
+     google.protobuf.Timestamp occurred_at = 4;
+     string user_id = 5;
+     // ...
+   }
+   ```
+
+2. **Add the subject and register the payload.**
+
+   ```go title="contracts/events/subjects.go"
+   SubjectMailMessageReceived    = "sh.mail.message.received.v1"
+   ```
+
+   ```go title="contracts/events/registry.go"
+   SubjectMailMessageReceived:    func() proto.Message { return &maileventsv1.MessageReceived{} },
+   ```
+
+   Subjects follow `sh.<service>.<thing>.<event>.v<N>`. An outbox writer created with `outbox.WithService("mail")` refuses any subject outside `sh.mail.`.
+
+3. **Regenerate the Go code.**
+
+   ```sh
+   cd contracts
+   ./gen.sh
+   ```
+
+   `./gen.sh` builds pinned tool versions into `contracts/bin`, runs `buf lint` and a format check, and writes `gen/go/`. On Windows, run it from Git Bash.
+
+4. **Publish from the use case, inside the transaction.**
+
+   The use case calls a port. In Auth's directory module, the domain records events and the use case passes them on inside `WithinTx` (see [Layering](/docs/developers/concepts/layering/)). The adapter maps each domain event to its protobuf payload and writes it to the outbox:
+
+   ```go title="auth/internal/directory/adapters/outbox/publisher.go"
+   func (p *Publisher) Publish(ctx context.Context, evs ...domain.Event) error {
+   	for _, ev := range evs {
+   		msg, err := p.payload(ctx, ev)
+   		if err != nil {
+   			return err
+   		}
+   		if err := p.pub.Publish(ctx, "sh.auth."+ev.EventName()+".v1", ev.AggregateID(), ev.AggregateVersion(), msg); err != nil {
+   			return fmt.Errorf("publish %s: %w", ev.EventName(), err)
+   		}
+   	}
+   	return nil
+   }
+   ```
+
+   `p.pub` is a `kit/outbox.Writer`. It returns an error if there is no transaction in `ctx`, which protects you from publishing outside the transaction by mistake. The relay that sends outbox rows to NATS is already running in every service.
+
+</Steps>
+
+## Consume
+
+<Steps>
+
+1. **Write a handler.**
+
+   A handler has a name, the subjects it listens to, and a function. Decode the payload with `env.Decode`, and put the org into `ctx` so RLS applies to your writes. This is Mail's handler that creates DKIM keys when Auth verifies a domain:
+
+   ```go title="mail/internal/dkim/adapters/adapters.go"
+   func DomainVerifiedHandler(e Ensurer) events.Handler {
+   	return events.NewHandler("dkim-domain-verified", []string{contractevents.SubjectAuthDomainVerified}, func(ctx context.Context, env events.Envelope) error {
+   		var ev authevents.DomainVerified
+   		if err := env.Decode(&ev); err != nil {
+   			return err
+   		}
+   		org, err := kernel.ParseID(ev.GetOrgId())
+   		if err != nil {
+   			org = env.OrgID
+   		}
+   		_, err = e.Handle(kernel.WithOrg(ctx, org), strings.ToLower(ev.GetDomain()))
+   		return err
+   	})
+   }
+   ```
+
+   Handler names must match `[a-z0-9][a-z0-9_-]{0,63}` and be unique within the service. The durable NATS consumer is named `<service>_<handler>`.
+
+2. **Register it.**
+
+   Add the handler to the list the service passes to `events.NewRegistry`:
+
+   | Service | Where handlers are collected |
+   |---|---|
+   | Auth | `auth/internal/server/server.go` (`EventHandlers`) |
+   | Mail | `mail/cmd/mail/wire_team.go` and `mail/cmd/mail/main.go` |
+   | Calendar | `calendar/internal/server/server.go` (`EventHandlers`) |
+
+   ```go title="mail/cmd/mail/main.go"
+   reg, err := events.NewRegistry(handlers...)
+   if err != nil {
+   	return err
+   }
+   consumer, err := inbox.NewConsumer(d.js, d.tx, pool, d.clock, logger, reg, inbox.Config{Service: "mail", Telemetry: tel})
+   ```
+
+   `inbox.NewConsumer` wraps every handler with the inbox check, so a redelivered event is skipped. Return an error to retry later; the event is redelivered with backoff and dead-lettered after 20 attempts.
+
+3. **Check it ran.**
+
+   Restart the service and trigger the change. The NATS monitoring endpoint shows streams and consumers:
+
+   ```sh
+   curl -s "http://localhost:8222/jsz?consumers=true"
+   ```
+
+   Look for a consumer named `mail_dkim-domain-verified` (or your `<service>_<handler>`), and check that its pending count goes to zero.
+
+</Steps>
+
+<Aside type="caution" title="Two copies of one service share a queue">
+Consumers are durable and named after the service. If you run two Mail processes on the same NATS (for example, a second copy on other ports), each event reaches only one of them.
+</Aside>
+
+## Test
+
+`kit/testkit.NewJetStream(t)` connects to the dev NATS and `testkit.UniqueName` gives per-test stream and handler names. `kit/inbox/inbox_test.go` shows a full publish, relay and consume round trip. For handler logic, test the use case it calls with a plain unit test.
+
+## Next steps
+
+- [Write a test](/docs/developers/recipes/tests/)
+- [Events concept](/docs/developers/concepts/events/)
+- [Debug a service](/docs/developers/recipes/debugging/)

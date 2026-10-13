@@ -1,0 +1,12 @@
+---
+import { Icon } from '@astrojs/starlight/components';
+---
+<a class="sh-home" href="/">Website</a>
+<a class="sh-gh" href="https://github.com/Suitehive" aria-label="Suitehive on GitHub"><Icon name="github" size="1.15rem" /></a>
+
+<style>
+  .sh-home { font-size: 0.9rem; font-weight: 500; color: var(--sl-color-gray-3); text-decoration: none; padding: 0.35rem 0.6rem; border-radius: 10px; }
+  .sh-home:hover { color: var(--sl-color-white); background: var(--sl-color-gray-6); }
+  .sh-gh { color: var(--sl-color-gray-3); display: inline-flex; padding: 0.4rem; border-radius: 10px; }
+  .sh-gh:hover { color: var(--sl-color-white); background: var(--sl-color-gray-6); }
+</style>

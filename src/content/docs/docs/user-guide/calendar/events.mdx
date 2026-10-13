@@ -1,0 +1,89 @@
+---
+title: Create and edit events
+description: Create events with quick create or the full editor, move and resize them, and set reminders.
+sidebar:
+  order: 2
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** the quick ways to create and change events, what the full editor offers, and how reminders work.
+
+## Quick create
+
+<Steps>
+
+1. Click an empty time slot, or click and drag to select a range. In month view, drag across days for a
+   multi-day event.
+
+2. A small form opens. Type a title. You can change the date and time, **Add guests**, pick a room from
+   **Add room**, and choose the calendar.
+
+3. Press `Enter` or select **Save**. For everything else, select **More options**.
+
+</Steps>
+
+Press `c` to open the full editor for a new event instead.
+
+## The full editor
+
+The editor opens full screen at `/calendar/event/<id>/edit`. Save with `Ctrl+Enter` (or `Ctrl+S`), close with `Esc`.
+
+| Field | Notes |
+|---|---|
+| Title | |
+| Date and time | Start and end, with an **All day** switch. Open **Time zones** to give the start and end their own time zone |
+| Repeat | See [Recurring events](/docs/user-guide/calendar/recurring-events/) |
+| Location and Video call link | A video link shows a **Join** button in the event details |
+| Description | Rich text |
+| Reminders | See below |
+| Calendar | Which of your calendars the event goes in |
+| Show as | **Busy** or **Free** for free/busy lookups |
+| Visibility | **Calendar default**, **Public** or **Private**. Private events show as busy to everyone except you |
+| Event color | **Calendar color**, or a color for this event only |
+
+The right side has three tabs: **Guests**, **Find a time** and **Rooms**. See
+[Invitations and RSVP](/docs/user-guide/calendar/invitations/) and
+[Find a time and rooms](/docs/user-guide/calendar/find-a-time-and-rooms/).
+
+## Move and resize
+
+- Drag an event to move it, including to another day in week view.
+- Drag its bottom edge to change the end time.
+- Times snap to 15 minutes. Press `Esc` while dragging to cancel.
+
+If the event repeats, Calendar asks which events to change. If it has guests, Calendar asks
+**Send update to guests?** After a move or resize, a toast offers **Undo**.
+
+If someone else changed the event at the same time, you see **This event was changed elsewhere**. Calendar
+reloads the event and puts it back; try again.
+
+## Event details
+
+Click an event to see its details: time in your time zone (and the organizer's, if different), how it repeats,
+location, guests and description. From there you can **Edit**, **Delete**, **Duplicate**, **Email guests**
+(opens Mail with the guests filled in) and, under **Options**, copy a link or export it.
+
+Right-click an event for more: **RSVP**, **Duplicate**, **Copy to** another calendar, **Change color**,
+**Email guests**, **Copy link**, **Export .ics** and **Delete**.
+
+## Reminders
+
+Each event uses its calendar's default reminders until you change them. Add reminders in the editor as an
+amount (minutes, hours, days or weeks) before the start, with a method:
+
+- **Notification**: a card in the bottom left of Calendar with **Join** (for video links),
+  **Snooze 5 min** and **Dismiss**.
+- **Email**: a reminder email.
+
+To get notifications outside the Calendar tab too, turn on **Settings → General → Desktop notifications**.
+Your browser asks for permission only then, never when the page loads.
+
+<Aside type="note" title="Notifications need Calendar open">
+Notification reminders are delivered to an open Calendar tab. Close every tab and you won't see them; use an
+email reminder for events you can't miss.
+</Aside>
+
+## Next steps
+
+- [Recurring events](/docs/user-guide/calendar/recurring-events/)
+- [Invitations and RSVP](/docs/user-guide/calendar/invitations/)

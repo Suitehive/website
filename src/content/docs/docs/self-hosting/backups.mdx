@@ -1,0 +1,108 @@
+---
+title: Backups and restore
+description: Back up databases, mail and settings with one command, and restore them on the same or a new server.
+sidebar:
+  order: 3
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** what `suitehive backup` saves, how to keep backups safe, and how to restore one.
+
+## What a backup contains
+
+`suitehive backup` writes one `.tar.gz` archive:
+
+| Entry | Contents |
+|---|---|
+| `postgres.sql.gz` | `pg_dumpall` of every Suitehive database (Auth, Mail, Calendar), without role passwords |
+| `mailblobs.tar.gz` | Stored message bodies and attachments (the `mailblobs` volume) |
+| `config/` | `.env`, `docker-compose.yml`, `docker-compose.build.yml` (if present), `Caddyfile`, `initdb/` |
+| `MANIFEST` | Format version, creation time, CLI version, image version and domain |
+
+TLS certificates are not included. Caddy requests new ones after a restore.
+
+<Aside type="danger" title="A backup holds your secrets and all mail">
+The archive contains `.env` with `SH_MASTER_KEY` and the database password, plus every message. It is created with mode 600. Copy it off the server to private, encrypted storage. Without `SH_MASTER_KEY`, encrypted data (signing keys, 2-step secrets, DKIM keys) can't be recovered.
+</Aside>
+
+## Take a backup
+
+The stack must be running.
+
+```sh
+suitehive backup
+```
+
+```text title="Output"
+==> Backing up Suitehive to /opt/suitehive/backups/suitehive-20261013-020000.tar.gz
+    + databases (12M compressed)
+    + mail blobs (1.4G compressed)
+    + configuration (.env, docker-compose.yml, Caddyfile)
+    + wrote /opt/suitehive/backups/suitehive-20261013-020000.tar.gz (1.4G)
+warning: the archive contains your secrets and all mail: keep it private and copy it off this server.
+```
+
+To write somewhere else, pass `--out`:
+
+```sh
+suitehive backup --out /mnt/backups/suitehive-$(date +%F).tar.gz
+```
+
+The mail blobs are streamed through a temporary `alpine:3.20` container, so Docker must be able to pull that image.
+
+### Schedule it
+
+The CLI has no scheduler. Use cron (as root, with the default install directory):
+
+```sh title="/etc/cron.d/suitehive-backup"
+0 2 * * * root /usr/local/bin/suitehive backup >> /var/log/suitehive-backup.log 2>&1
+```
+
+Old archives are never deleted for you. Remove them yourself, for example with `find /opt/suitehive/backups -name 'suitehive-*.tar.gz' -mtime +14 -delete`.
+
+## Restore a backup
+
+<Aside type="caution" title="Restore replaces everything">
+A restore drops the current Auth, Mail and Calendar databases and empties the mail storage before loading the backup. Anything created after the backup is lost.
+</Aside>
+
+<Steps>
+1. Copy the archive to the server.
+2. Run the restore and type your domain when asked:
+
+   ```sh
+   suitehive restore /path/to/suitehive-20261013-020000.tar.gz
+   ```
+
+3. Wait for it to finish. It:
+   - restores `.env` from the archive (your current one is kept as `.env.before-restore-<time>`), unless you pass `--keep-env`;
+   - stops Caddy, Auth, Mail and Calendar, starts PostgreSQL and NATS;
+   - sets the database password to the one in `.env`, drops and recreates the three databases and loads the dump;
+   - replaces the mail storage with the archived blobs;
+   - starts everything and waits until Auth is healthy.
+4. Check with `suitehive status` and sign in.
+</Steps>
+
+The `psql` output of the restore is saved to `backups/restore-<time>.log` in the install directory. Harmless errors such as "role already exists" appear there.
+
+## Move to a new server
+
+A restore works on an empty directory: the configuration comes from the archive.
+
+<Steps>
+1. On the new server, install Docker with Compose v2 and the `suitehive` CLI.
+2. Restore into an empty install directory:
+
+   ```sh
+   suitehive restore --dir /opt/suitehive /path/to/backup.tar.gz
+   ```
+
+3. Point your DNS A/AAAA record at the new server and check with `suitehive dns --check`.
+</Steps>
+
+Keep the restored `.env` (don't pass `--keep-env` on a new server): it holds the master key that decrypts your data.
+
+## Next steps
+
+- [Upgrades](/docs/self-hosting/upgrades/)
+- [The suitehive CLI](/docs/self-hosting/cli/)

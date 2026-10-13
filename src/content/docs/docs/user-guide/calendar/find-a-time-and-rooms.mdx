@@ -1,0 +1,79 @@
+---
+title: Find a time and book rooms
+description: See when your guests are free, pick a suggested time, and book a meeting room.
+sidebar:
+  order: 5
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how to find a time that works for everyone and how to add a room to an event.
+
+## Find a time
+
+<Steps>
+
+1. Add guests to the event, then open the **Find a time** tab in the editor.
+
+2. A day grid shows one column per person ("You" first) with their busy times. Your proposed time is a band
+   across the columns. Drag it, or focus it and use `↑` and `↓`, to try other times. Use the arrows above the
+   grid to change the day.
+
+3. Under **Suggested times**, select a chip to move the event to that slot. Suggestions come from the next
+   7 days within working hours. A chip that only works because some optional guests are busy says so.
+
+</Steps>
+
+Find a time only works for timed events. If the event is all day, turn off **All day** first.
+
+People outside your organization show **Outside your organization: no availability**. Suitehive can only see
+the free/busy times of people on your server.
+
+Free/busy only shows when someone is busy, never what they're doing. Events marked **Show as: Free** don't
+count as busy.
+
+## Rooms
+
+Rooms are calendars for meeting rooms and equipment. They appear under **Rooms** in the sidebar. The local trial comes with demo rooms.
+
+### Add a room to an event
+
+<Steps>
+
+1. Open the **Rooms** tab in the editor.
+
+2. Filter by **Capacity** (for example "6+ people") and **Features** (Video, Whiteboard, Projector, Phone,
+   Step-free).
+
+3. Each room shows its capacity, floor, building and features. A room that's taken shows **Busy** with the
+   conflicting time. Select **Add** on a free room.
+
+</Steps>
+
+You can also pick a room from **Add room** in quick create.
+
+### Find a room from the sidebar
+
+Select **Find a room** in the sidebar and search by name, floor or building. **Show** adds the room's calendar
+to your view; **Book** opens a new event with that room already added.
+
+### How rooms answer
+
+Each room has a booking policy set by your admin:
+
+| Policy | What happens |
+|---|---|
+| Auto-accept | The room accepts if it's free and declines if it's busy |
+| Manual | The booking waits for the room's manager to approve it |
+| Restricted to groups | Only members of certain groups can book it |
+
+A room can't be double-booked: two people booking the same slot at the same moment can't both get it.
+Rooms are booked for timed events only.
+
+<Aside type="note" title="Managing rooms">
+A **Rooms and resources** section for admins is planned for the Admin console but isn't available yet.
+</Aside>
+
+## Next steps
+
+- [Invitations and RSVP](/docs/user-guide/calendar/invitations/)
+- [Sharing](/docs/user-guide/calendar/sharing/)

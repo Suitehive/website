@@ -1,0 +1,199 @@
+---
+title: The suitehive CLI
+description: Every command, flag and environment variable of the suitehive command-line tool.
+sidebar:
+  order: 1
+---
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** what each `suitehive` command does, every flag it takes, and the environment variables that change its behavior.
+
+`suitehive` is a single bash script (bash 3.2 or later) that installs and operates a Suitehive server with Docker Compose. The installer puts it in `/usr/local/bin` when run as root, or `~/.local/bin` otherwise. In a clone of the [suitehive repo](https://github.com/Suitehive/suitehive) you can run it as `./bin/suitehive`.
+
+It needs Docker with Compose v2, `curl` (or `wget`), `openssl` (or `base64`), `tar` and `gzip`.
+
+<Aside type="caution" title="No published images yet">
+The container images under `ghcr.io/suitehive/*` are not published yet, so `suitehive install` cannot pull a working stack today. Use `--dry-run` to see what would be installed, or `--build` to build the images from source.
+</Aside>
+
+## Global options
+
+These work with every command.
+
+| Option | Description |
+|---|---|
+| `--dir <path>` | Install directory. Default: `$SH_DIR`, else the current directory if it holds an install, else `/opt/suitehive` as root or `~/suitehive` otherwise. |
+| `--yes`, `-y` | Never ask. Accept defaults and confirmations. |
+| `--no-color` | Plain output without colors. |
+| `-h`, `--help` | Help for the command. `suitehive help <command>` does the same. |
+
+Options also accept the `--name=value` form, for example `--dir=/srv/suitehive`.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| [`install`](#install) | Set up Suitehive on this server, or `--local` to try it on a laptop |
+| [`status`](#status) | Show containers, health, version and URLs |
+| [`logs`](#logs) | Show service logs |
+| [`upgrade`](#upgrade) | Pull new images (or switch version) and restart |
+| [`backup`](#backup) | Write a backup archive |
+| [`restore`](#restore) | Restore a backup archive |
+| [`dns`](#dns) | Print the DNS records to create, and check them |
+| [`uninstall`](#uninstall) | Stop and remove the containers |
+| [`version`](#version) | Print the CLI, image and Docker Compose versions |
+
+### install
+
+```sh
+suitehive install [options]
+```
+
+Writes `.env` (with new secrets), `docker-compose.yml`, `Caddyfile` and `initdb/` into the install directory, pulls the images, starts the stack, creates your organization and first admin, and prints the DNS records to create. In a terminal it asks a few questions; every answer can also be a flag or an `SH_*` environment variable. Running it again on an existing install keeps the secrets and applies new settings.
+
+| Flag | Environment variable | Default | Description |
+|---|---|---|---|
+| `--domain <name>` | `SH_DOMAIN` | asked | Mail domain, for example `example.com` |
+| `--hostname <name>` | `SH_HOSTNAME` | `suite.<domain>` | Public hostname for web, IMAP and SMTP |
+| `--admin-email <addr>` | `SH_ADMIN_EMAIL` | `admin@<domain>` | First admin. Must be on `<domain>`. |
+| `--admin-name <name>` | `SH_ADMIN_NAME` | `Admin` | Admin display name |
+| `--admin-password <pw>` | `SH_ADMIN_PASSWORD` | generated | At least 12 characters. A generated password is shown once and never written to disk. |
+| `--org-name <name>` | `SH_ORG_NAME` | from the domain | Organization name (up to 120 characters) |
+| `--tls-email <addr>` | `SH_TLS_EMAIL` | admin email | Let's Encrypt account email |
+| `--version <tag>` | `SH_VERSION` | `edge` (`local` with `--build`) | Image tag |
+| `--local` | `SH_LOCAL=true` | | Laptop trial: `http://localhost:8080`, no TLS, demo org and users |
+| `--build` | `SH_BUILD=true` | | Build the images from source (clones the repos into `<dir>/src`; needs `git`) |
+| `--dry-run` | | | Write all files and print the Docker commands, the setup request (password masked) and the DNS records without running anything in Docker |
+| `--force` | | | Replace an existing `.env` with new secrets. Only for a fresh start: existing data becomes unreadable. The old file is kept as `.env.before-force`. |
+| `--skip-checks` | | | Continue on a machine with less than about 4 GB of memory |
+
+Settings are resolved in this order: flag, then `SH_*` environment variable, then the existing `.env`, then the question or default.
+
+<Tabs syncKey="os">
+<TabItem label="macOS / Linux">
+```sh
+# Interactive
+suitehive install
+
+# Unattended
+suitehive install --domain example.com --admin-email founder@example.com --yes
+
+# Laptop trial, see what would happen without starting anything
+suitehive install --local --dry-run --yes
+```
+</TabItem>
+<TabItem label="Windows (PowerShell)">
+```powershell
+# Local trial only. Production servers run Linux.
+powershell -ExecutionPolicy Bypass -File install.ps1 -DryRun
+```
+</TabItem>
+</Tabs>
+
+What the installer checks before it starts:
+
+- Docker is installed, the daemon answers, and Compose v2 is present (with `--dry-run` a missing Docker is only a warning).
+- At least about 4 GB of memory (the hard limit is 3.5 GiB). `--local` and `--skip-checks` turn this into a warning.
+- The ports it needs are free: 80, 443, 25, 465, 587, 993 and the Auth loopback port 8081 on a server; 8080, 8443 and 8081 for `--local`.
+
+`--local` always uses the domain `suitehive.local`, the demo users `admin@`, `priya@` and `alex@suitehive.local` (password `suitehive-dev`), and the host ports 8080 (HTTP), 2525 (SMTP), 2465 (SMTPS), 2587 (submission) and 1993 (IMAPS). Don't expose a local trial to the internet.
+
+The Windows script `install.ps1` only sets up a local trial. It takes `-Dir`, `-Version`, `-DryRun`, `-Yes`, `-Force` and `-Help` (`-Build` is not supported on Windows; use WSL and `install.sh --build`). When piped into `iex` it reads `SH_DIR`, `SH_VERSION`, `SH_DRY_RUN=1`, `SH_YES=1` and `SH_FORCE=1` from the environment instead.
+
+### status
+
+```sh
+suitehive status
+```
+
+Shows the install directory, image version, mode and URLs, then `docker compose ps`, then the health of each service. Auth is checked through its loopback `/healthz` (which also reports its version); the other services through their Docker healthchecks.
+
+### logs
+
+```sh
+suitehive logs [service] [-f] [--tail <n>]
+```
+
+Shows the last 200 lines of every service, or of one of `caddy`, `postgres`, `nats`, `auth`, `mail`, `calendar`.
+
+| Flag | Description |
+|---|---|
+| `-f`, `--follow` | Keep streaming new lines (Ctrl-C to stop) |
+| `--tail <n>` | Number of lines per service, or `all` |
+
+### upgrade
+
+```sh
+suitehive upgrade [--version <tag>] [--backup | --no-backup] [--yes]
+```
+
+Offers a backup, sets `SH_VERSION` when `--version` is given, refreshes `docker-compose.yml`, `Caddyfile` and `initdb/` (your previous files are kept as `.bak`; `.env` is never replaced), pulls the images (or runs `git pull` and rebuilds for `--build` installs), restarts changed containers and waits for Auth. `--backup` always takes a backup first; `--no-backup` or `--yes` without `--backup` skips it. See [Upgrades](/docs/self-hosting/upgrades/).
+
+### backup
+
+```sh
+suitehive backup [--out <file.tar.gz>]
+```
+
+Writes `<dir>/backups/suitehive-YYYYmmdd-HHMMSS.tar.gz`, or the path in `--out`. The stack must be running. See [Backups and restore](/docs/self-hosting/backups/).
+
+### restore
+
+```sh
+suitehive restore <file.tar.gz> [--keep-env] [--yes]
+```
+
+Replaces all current data with a backup. You type the domain to confirm (or pass `--yes`). `--keep-env` keeps the current `.env` instead of the one in the archive.
+
+### dns
+
+```sh
+suitehive dns [--check | --no-check] [--token <admin token>]
+```
+
+Prints the DNS records your domain needs and, when `dig` or `nslookup` is available, looks each one up and marks it found, missing or different. `--check` is the default when a lookup tool exists; `--no-check` only prints. Lookups can lag behind your DNS panel by the record's TTL.
+
+`--token` (or `SH_ADMIN_TOKEN`) asks Mail's admin API for the DKIM record. Without it, find DKIM in Admin under Domains. A local trial needs no DNS records. See [DNS records](/docs/getting-started/dns/).
+
+### uninstall
+
+```sh
+suitehive uninstall [--purge] [--yes]
+```
+
+Stops and removes the containers. The data volumes and the install directory are kept, so `suitehive install` brings everything back. `--purge` also deletes every data volume (mail, calendars, accounts, certificates) and the install directory, after you type the domain to confirm. Take a backup first.
+
+### version
+
+```sh
+suitehive version
+```
+
+Prints the CLI version, the image tag of the install (`SH_VERSION` in `.env`) and the Docker Compose version. `suitehive --version` and `-V` do the same.
+
+## Environment variables
+
+Besides the `install` variables in the table above, the CLI reads:
+
+| Variable | Default | Description |
+|---|---|---|
+| `SH_DIR` | see `--dir` | Install directory |
+| `NO_COLOR` | | Any value turns colors off |
+| `SH_REF` | `main` | Git branch or tag of the suitehive repo that templates are downloaded from |
+| `SH_REPO_RAW` | GitHub raw URL for `SH_REF` | Base URL for templates and the CLI itself |
+| `SH_TEMPLATES_DIR` | `../templates` next to the script | Use templates from this local directory |
+| `SH_GIT_BASE` | `https://github.com/Suitehive` | Where `--build` clones the service repos from |
+| `SH_HEALTH_TIMEOUT` | `180` | Seconds to wait for Auth's `/healthz` after starting |
+| `SH_PUBLIC_IP`, `SH_PUBLIC_IP6` | detected | Server addresses for the DNS table. `none` leaves that record out. |
+| `SH_ADMIN_TOKEN` | | Same as `dns --token` |
+| `SH_BIN_DIR` | `/usr/local/bin` or `~/.local/bin` | `install.sh` only: where to put the CLI |
+
+<Aside type="note" title="Your shell does not override .env">
+When the CLI runs Docker Compose it removes every `SH_*` variable from the environment first, so `.env` is the single source of truth for the running stack. To change a setting, edit `.env` (see [Configuration](/docs/self-hosting/configuration/)).
+</Aside>
+
+## Next steps
+
+- [Configuration reference](/docs/self-hosting/configuration/)
+- [Backups and restore](/docs/self-hosting/backups/)
+- [Troubleshooting](/docs/self-hosting/troubleshooting/)

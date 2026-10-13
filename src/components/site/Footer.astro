@@ -1,0 +1,80 @@
+---
+import HiveMark from '../HiveMark.astro';
+const gh = (r: string) => `https://github.com/Suitehive/${r}`;
+const repos = ['suitehive', 'architecture', 'kit', 'contracts', 'ui', 'auth', 'mail', 'calendar', 'deploy', 'website'];
+---
+<footer class="footer">
+  <div class="wrap">
+    <div class="top">
+      <div class="about">
+        <a class="brand" href="/" aria-label="Suitehive home"><HiveMark size={30} /><span>Suitehive</span></a>
+        <p>Mail, Calendar and single sign-on for your team, on your own server. Open source and self-hosted.</p>
+        <p class="status"><span class="dot" aria-hidden="true"></span>Early development: not production-ready yet.</p>
+      </div>
+      <nav class="cols" aria-label="Footer">
+        <div>
+          <h2>Product</h2>
+          <ul>
+            <li><a href="/features/mail/">Mail</a></li>
+            <li><a href="/features/calendar/">Calendar</a></li>
+            <li><a href="/features/admin/">Admin and SSO</a></li>
+            <li><a href="/self-hosting/">Self-hosting</a></li>
+            <li><a href="/roadmap/">Roadmap</a></li>
+            <li><a href="/about/">About</a></li>
+          </ul>
+        </div>
+        <div>
+          <h2>Docs</h2>
+          <ul>
+            <li><a href="/docs/getting-started/">Getting started</a></li>
+            <li><a href="/docs/user-guide/mail/overview/">User guide</a></li>
+            <li><a href="/docs/admin/overview/">Admin guide</a></li>
+            <li><a href="/docs/self-hosting/cli/">Operations</a></li>
+            <li><a href="/docs/developers/first-15-minutes/">Developers</a></li>
+            <li><a href="/docs/api/auth/">API reference</a></li>
+          </ul>
+        </div>
+        <div class="repos">
+          <h2>Repositories</h2>
+          <ul>
+            {repos.map((r) => (<li><a href={gh(r)}><code>{r}</code></a></li>))}
+          </ul>
+        </div>
+      </nav>
+    </div>
+    <div class="bottom">
+      <p>License: to be decided before the first release.</p>
+      <p><a href="https://github.com/Suitehive">github.com/Suitehive</a></p>
+    </div>
+  </div>
+</footer>
+
+<style>
+  .footer { border-top: 1px solid var(--line); padding: 72px 0 40px; margin-top: 40px; font-size: 0.94rem; }
+  .top { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 2fr); gap: 48px; }
+  .brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; }
+  .brand span { font-family: var(--display); font-weight: 720; font-size: 1.4rem; letter-spacing: -0.045em; }
+  .about p { color: var(--muted); max-width: 22rem; margin: 16px 0 0; }
+  .status { display: inline-flex; align-items: center; gap: 8px; font-size: 0.88rem; }
+  .status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--sun); flex: none; }
+  .cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; }
+  h2 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--subtle); margin: 6px 0 14px; font-weight: 600; }
+  ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; }
+  .repos ul { grid-template-columns: 1fr 1fr; column-gap: 16px; }
+  a { color: var(--ink); text-decoration: none; }
+  ul a { color: var(--muted); }
+  ul a:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+  code { font-size: 0.86rem; }
+  .bottom { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-top: 56px; padding-top: 24px; border-top: 1px solid var(--line); color: var(--subtle); font-size: 0.88rem; }
+  .bottom p { margin: 0; }
+  .bottom a { color: var(--subtle); }
+  .bottom a:hover { color: var(--ink); }
+  @media (max-width: 860px) {
+    .top { grid-template-columns: 1fr; gap: 40px; }
+  }
+  @media (max-width: 560px) {
+    .cols { grid-template-columns: 1fr 1fr; }
+    .repos { grid-column: 1 / -1; }
+    .repos ul { grid-template-columns: 1fr 1fr 1fr; }
+  }
+</style>

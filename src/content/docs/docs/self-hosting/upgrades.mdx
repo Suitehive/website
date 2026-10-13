@@ -1,0 +1,88 @@
+---
+title: Upgrades
+description: Move an install to a newer Suitehive version, pin a release, and roll back.
+sidebar:
+  order: 4
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how `suitehive upgrade` works, how to pin a version, and how to go back if an upgrade fails.
+
+<Aside type="caution" title="Before the first release">
+Suitehive is in early development. There are no tagged releases yet, and configuration, APIs and data can change in breaking ways until v1. Take a backup before every upgrade.
+</Aside>
+
+## Versions
+
+`SH_VERSION` in `.env` is the image tag of `ghcr.io/suitehive/auth`, `mail` and `calendar`.
+
+| Tag | Meaning |
+|---|---|
+| `edge` | The default. Follows the `main` branch. |
+| A release, such as `0.1.0` | A fixed version. Recommended for production once releases exist. |
+| `local` | Images built from source with `install --build` |
+
+`suitehive version` and `suitehive status` show the tag an install uses.
+
+## Upgrade
+
+<Steps>
+1. Run the upgrade:
+
+   ```sh
+   suitehive upgrade
+   ```
+
+   To switch to a specific version and always take a backup first:
+
+   ```sh
+   suitehive upgrade --version 0.1.0 --backup
+   ```
+
+2. The CLI then:
+   - asks whether to take a backup first (yes by default);
+   - sets `SH_VERSION` in `.env` when you pass `--version`;
+   - refreshes `docker-compose.yml`, `Caddyfile` and `initdb/` from the suitehive repo (branch `$SH_REF`, default `main`), keeping changed files as `.bak`;
+   - pulls the new images, or for `--build` installs runs `git pull` in `src/` and rebuilds;
+   - restarts the changed containers and waits until Auth is healthy.
+3. Check with `suitehive status`.
+</Steps>
+
+`.env` is never replaced, so your settings and secrets stay. Database migrations run automatically when each service starts.
+
+| Flag | Description |
+|---|---|
+| `--version <tag>` | Switch to this image tag |
+| `--backup` | Always take a backup first |
+| `--no-backup` | Never take a backup |
+| `--yes` | Don't ask. Without `--backup`, no backup is taken. |
+
+<Aside type="note" title="Your own docker-compose.yml edits">
+If you edited `docker-compose.yml` (for example to add rspamd), the upgrade replaces it and keeps your version as `docker-compose.yml.bak`. Compare the two and re-apply your changes.
+</Aside>
+
+## Roll back
+
+Images can go back, but a database that a newer version has migrated may not work with older code. The safe way back is the backup taken before the upgrade.
+
+<Steps>
+1. Restore the backup from before the upgrade:
+
+   ```sh
+   suitehive restore /opt/suitehive/backups/suitehive-<time>.tar.gz
+   ```
+
+   This also restores the old `.env`, including the old `SH_VERSION`.
+2. Pull and start the old images:
+
+   ```sh
+   suitehive upgrade --version <old tag> --no-backup
+   ```
+</Steps>
+
+On `edge` there is no older tag to return to, which is one more reason to pin a release in production.
+
+## Next steps
+
+- [Backups and restore](/docs/self-hosting/backups/)
+- [Logs](/docs/self-hosting/logs/)

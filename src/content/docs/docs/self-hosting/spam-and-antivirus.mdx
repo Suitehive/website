@@ -1,0 +1,96 @@
+---
+title: Spam and antivirus
+description: Connect rspamd for spam scoring and ClamAV for virus scanning, and what each costs in memory.
+sidebar:
+  order: 8
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** what Mail checks on its own, how the optional rspamd and ClamAV scanners plug in, and what they cost.
+
+## What Mail does without extra scanners
+
+Every inbound message is checked for SPF, DKIM and DMARC. Recipients are checked against the directory before the message is accepted. Without a spam or virus scanner configured, those two pipeline steps do nothing.
+
+## Optional scanners
+
+| Scanner | Setting | What happens | Extra memory |
+|---|---|---|---|
+| [rspamd](https://rspamd.com) | `SH_RSPAMD_URL` | Each message gets a spam score. Spam is delivered with the Spam label. | About 300 MB |
+| [ClamAV](https://www.clamav.net) | `SH_CLAMAV_ADDR` | Infected messages are discarded. | About 1 to 1.5 GB |
+
+With both enabled, 4 GB of RAM is the practical minimum for the server.
+
+Both scanners **fail open**: if a scanner is down, slow or returns an error, Mail logs it and delivers the message unscanned. A broken scanner never loses or bounces mail. Mail from trusted networks (`SH_SMTP_TRUSTED_NETWORKS`) skips the spam check.
+
+### rspamd settings
+
+| Variable | Default | Description |
+|---|---|---|
+| `SH_RSPAMD_URL` | off | Base URL of rspamd's normal worker, for example `http://rspamd:11333` |
+| `SH_RSPAMD_PASSWORD` | | Sent as rspamd's `Password` header, if set |
+| `SH_RSPAMD_TIMEOUT` | `15s` | Time limit for one check |
+| `SH_SPAM_THRESHOLD` | `0` | `0`: follow rspamd's action (`add header`, `rewrite subject` or `reject` mean spam). A number: spam at or above this score. |
+
+Messages larger than 20 MiB are not sent to rspamd.
+
+### ClamAV settings
+
+| Variable | Default | Description |
+|---|---|---|
+| `SH_CLAMAV_ADDR` | off | clamd address: `clamav:3310`, `tcp://clamav:3310` or `unix:/path/to/clamd.sock` |
+| `SH_CLAMAV_TIMEOUT` | `60s` | Time limit for one scan, including the connection |
+
+Mail streams up to the first 25 MiB of each message to clamd (clamd's default stream limit). Only a definite "found" result discards a message.
+
+## Enable them
+
+<Aside type="caution" title="Not part of the installer yet">
+`suitehive install` doesn't set up rspamd or ClamAV. You add them to `docker-compose.yml` yourself, and `suitehive upgrade` replaces that file (your edited copy is kept as `docker-compose.yml.bak`). Re-apply your changes after each upgrade.
+</Aside>
+
+<Steps>
+1. Make sure the server has enough memory (see the table above).
+2. In `docker-compose.yml` in the install directory, add the scanner services and point Mail at them. The images below are the projects' own; check their documentation for configuration and for making rspamd's normal worker listen on the container network.
+
+   ```yaml title="docker-compose.yml (additions)"
+   services:
+     mail:
+       environment:
+         # keep the existing variables, add:
+         SH_RSPAMD_URL: http://rspamd:11333
+         SH_CLAMAV_ADDR: clamav:3310
+
+     rspamd:
+       image: rspamd/rspamd
+       restart: unless-stopped
+
+     clamav:
+       image: clamav/clamav
+       restart: unless-stopped
+       volumes:
+         - clamav_db:/var/lib/clamav
+
+   volumes:
+     clamav_db: {}
+   ```
+
+3. Start the new containers and restart Mail:
+
+   ```sh
+   cd /opt/suitehive && docker compose up -d
+   ```
+
+4. Check Mail's log. A malformed value stops Mail at startup with an error naming `SH_RSPAMD_URL` or `SH_CLAMAV_ADDR`; an unreachable scanner shows up as logged errors while mail keeps flowing:
+
+   ```sh
+   suitehive logs mail --tail 100
+   ```
+</Steps>
+
+ClamAV downloads its signature database on first start, which takes a few minutes. Until clamd answers, messages are delivered unscanned.
+
+## Next steps
+
+- [Smarthost relay](/docs/self-hosting/smarthost/)
+- [Monitoring](/docs/self-hosting/monitoring/)

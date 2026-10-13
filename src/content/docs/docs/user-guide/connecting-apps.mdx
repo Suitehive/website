@@ -1,0 +1,171 @@
+---
+title: Connecting apps
+description: Set up Thunderbird, Apple Mail, iPhone, iPad and Android mail and calendar apps with IMAP, SMTP and CalDAV.
+sidebar:
+  order: 4
+---
+import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** the server settings for mail and calendar apps, and how to add your account to the
+most common ones.
+
+## Before you start
+
+Create an app password in **Account → App passwords**. Choose **Mail apps** for IMAP and SMTP, **Calendar apps**
+for CalDAV, or both. Your account password doesn't work in these apps. See
+[Your account](/docs/user-guide/account/).
+
+## Server settings
+
+Replace `suite.example.com` with your Suitehive hostname and `priya@example.com` with your email address.
+
+| Setting | Value |
+|---|---|
+| Username | Your full email address, for example `priya@example.com` |
+| Password | Your app password |
+| Incoming mail (IMAP) | `suite.example.com`, port `993`, SSL/TLS |
+| Outgoing mail (SMTP) | `suite.example.com`, port `587`, STARTTLS |
+| Outgoing mail, alternative | `suite.example.com`, port `465`, SSL/TLS |
+| Authentication | Normal password |
+| CalDAV server | `https://suite.example.com/dav/` |
+
+Mail shows your server name and ports, with copy buttons, in **Mail → Settings → Mail apps**. Calendar shows your exact
+CalDAV address in **Calendar → Settings → Calendar apps**.
+
+<Aside type="note" title="App password dialog">
+After you create an app password, the dialog lists your username and may list server settings. Filling in the
+server settings there is still being finished; until then, use the values on this page or in **Mail apps**.
+</Aside>
+
+### Local trial
+
+In local mode the ports are different and the certificate is self-signed, so your app will ask you to trust it.
+
+| Setting | Value |
+|---|---|
+| IMAP | `localhost`, port `1993`, SSL/TLS |
+| SMTP | `localhost`, port `2587`, STARTTLS, or port `2465`, SSL/TLS |
+| CalDAV | `http://localhost:8080/dav/` |
+
+## Mail apps
+
+<Tabs>
+<TabItem label="Thunderbird">
+
+<Steps>
+
+1. Open **Account Settings → Account Actions → Add Mail Account**.
+
+2. Enter your name, email address and app password, then select **Configure manually**.
+
+3. Set incoming to IMAP, `suite.example.com`, port 993, SSL/TLS. Set outgoing to SMTP, `suite.example.com`,
+   port 587, STARTTLS. Use **Normal password** and your full email address as the username for both.
+
+4. Select **Done**.
+
+</Steps>
+
+</TabItem>
+<TabItem label="Apple Mail (Mac)">
+
+<Steps>
+
+1. Open **Mail → Add Account**, choose **Other Mail Account**, and continue.
+
+2. Enter your name, email address and app password, then select **Sign In**.
+
+3. When Mail asks for server details, choose **IMAP** and enter `suite.example.com` for both the incoming and
+   outgoing server, with your full email address as the username.
+
+</Steps>
+
+Apple Mail picks the port and security on its own. If sending fails, set the outgoing server to port 587 with
+TLS in the account's **Server Settings**.
+
+</TabItem>
+<TabItem label="iPhone and iPad">
+
+<Steps>
+
+1. Open **Settings → Mail → Accounts → Add Account → Other → Add Mail Account**.
+
+2. Enter your name, email address and app password, then select **Next**.
+
+3. Choose **IMAP**. Enter `suite.example.com` as the host name for both incoming and outgoing mail, with your
+   full email address and app password for both.
+
+4. Select **Next** and **Save**.
+
+</Steps>
+
+</TabItem>
+<TabItem label="Android">
+
+Use any mail app that supports IMAP, such as Thunderbird for Android.
+
+<Steps>
+
+1. Add an account and choose manual setup, or IMAP, when asked.
+
+2. Incoming: IMAP, `suite.example.com`, port 993, SSL/TLS.
+
+3. Outgoing: SMTP, `suite.example.com`, port 587, STARTTLS (or 465, SSL/TLS).
+
+4. Use your full email address and your app password for both.
+
+</Steps>
+
+</TabItem>
+</Tabs>
+
+Menu names vary between app versions. If a step doesn't match, look for "manual setup" or "other account".
+
+## Calendar apps
+
+Calendar sync uses CalDAV. Your app sees every calendar you can read, and changes sync both ways.
+
+<Tabs>
+<TabItem label="Apple Calendar and iPhone">
+
+On a Mac, open **Calendar → Add Account → Other CalDAV Account**. On iPhone or iPad, open
+**Settings → Calendar → Accounts → Add Account → Other → Add CalDAV Account**.
+
+Use **Manual** account type if asked, your full email address, your app password, and `suite.example.com`
+as the server.
+
+</TabItem>
+<TabItem label="Thunderbird">
+
+Open the Calendar tab, choose **New Calendar → On the Network**, and enter your email address and
+`https://suite.example.com/dav/` as the location. Sign in with your app password when asked, then pick the
+calendars to add.
+
+</TabItem>
+<TabItem label="Android">
+
+Android has no built-in CalDAV support. Install DAVx⁵, add an account with **Login with URL and user name**,
+and enter `https://suite.example.com/dav/`, your email address and your app password. Your calendars then
+appear in the phone's calendar app.
+
+</TabItem>
+</Tabs>
+
+## Autodiscovery
+
+If your admin added the SRV records from [DNS setup](/docs/getting-started/dns/), apps that support DNS
+service discovery can find the servers from your email address alone. `https://suite.example.com/.well-known/caldav`
+also points calendar apps to the right place. If discovery doesn't work in your app, enter the settings by hand.
+
+## Troubleshooting
+
+| Problem | Try this |
+|---|---|
+| The app rejects your password | Use an app password, not your account password. Check that it has the right scope (Mail apps or Calendar apps) and wasn't revoked |
+| You can't create an app password | Your organization may have turned app passwords off. Ask your admin |
+| Sending fails but receiving works | Try port 465 with SSL/TLS instead of 587 |
+| A certificate warning in the local trial | Expected: the local trial uses a self-signed certificate |
+
+## Next steps
+
+- [Your account](/docs/user-guide/account/)
+- [DNS setup](/docs/getting-started/dns/)

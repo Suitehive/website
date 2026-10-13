@@ -1,0 +1,75 @@
+---
+title: Search
+description: Find mail with free text, Gmail-style search operators and the advanced search form.
+sidebar:
+  order: 3
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how to search your mail, which operators are supported, and how to turn a search into a filter.
+
+## Search basics
+
+Press `/` or select the search box in the top bar and type. Plain words match the subject, the body and the
+addresses. As you type, suggestions show people, labels and operator completions.
+
+Results open at `/mail/search?q=...`. The query shows as chips you can remove one at a time, and matched
+words are highlighted. Spam and Trash are left out unless you add `in:anywhere` (or search `in:spam` or `in:trash`).
+
+## Operators
+
+| Operator | Example | Finds |
+|---|---|---|
+| `from:` | `from:priya` | Mail from a sender |
+| `to:` | `to:alex@suitehive.local` | Mail sent to someone |
+| `cc:`, `bcc:` | `cc:alex` | Mail with someone in Cc or Bcc |
+| `subject:` | `subject:roadmap` | Words in the subject |
+| `filename:` | `filename:pdf` | Attachments by file name |
+| `label:` | `label:work` | Mail with a label |
+| `in:` | `in:sent` | A system folder: `inbox`, `sent`, `drafts`, `trash`, `spam`, `starred`, `important` |
+| `in:anywhere` | `in:anywhere invoice` | Includes Spam and Trash (`in:all` works too) |
+| `is:` | `is:unread` | `unread`, `read`, `starred` or `important` |
+| `has:attachment` | `has:attachment` | Mail with at least one attachment |
+| `after:`, `before:` | `after:2026/10/01` | Mail after or before a date: `YYYY/MM/DD`, `YYYY-MM-DD` or Unix seconds |
+| `newer:`, `older:` | `older:2026/01/01` | Same as `after:` and `before:` |
+| `newer_than:`, `older_than:` | `newer_than:7d` | Relative dates: a number with `d` (days), `m` (months) or `y` (years) |
+| `larger:`, `smaller:` | `larger:10M` | Message size in bytes, with an optional `K`, `M` or `G` |
+| `size:` | `size:5M` | Same as `larger:` |
+
+`before:` and `after:` start at midnight of that day. Today the server reads these dates in UTC, not in
+your own time zone.
+
+## Combine terms
+
+| Syntax | Example | Meaning |
+|---|---|---|
+| Space | `from:priya roadmap` | Both must match (AND) |
+| `OR` | `from:priya OR from:alex` | Either matches. `OR` must be upper case |
+| `{ }` | `{from:priya from:alex}` | Any term inside matches (same as OR) |
+| `-` | `roadmap -draft` | Leave out matches |
+| `" "` | `"quarterly plan"` | An exact phrase |
+| `( )` | `subject:(plan review)` | Group terms; works after text operators |
+
+AND binds loosest, so `a OR b c` means `(a OR b) AND c`. An unknown operator, like `foo:bar` or a URL,
+is searched as plain text. A known operator with a bad value, like `is:archived` or `before:yesterday`,
+shows an error that names the operator.
+
+## Advanced search
+
+Select **Search options** at the right of the search box to open a form with **From**, **To**, **Subject**,
+**Has the words**, **Date within**, **Size** (larger or smaller than a number of MB) and **Has attachment**.
+The form writes the operator query for you and shows it below the fields.
+
+Select **Create filter** in the form to turn the same criteria into a filter.
+See [Filters and settings](/docs/user-guide/mail/filters-and-settings/).
+
+<Aside type="tip" title="Examples">
+- `from:priya has:attachment newer_than:30d` — attachments Priya sent in the last 30 days
+- `is:unread label:work -from:alex` — unread work mail not from Alex
+- `filename:pdf larger:5M` — large PDF attachments
+</Aside>
+
+## Next steps
+
+- [Filters and settings](/docs/user-guide/mail/filters-and-settings/)
+- [Keyboard shortcuts](/docs/user-guide/mail/shortcuts/)

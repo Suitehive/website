@@ -1,0 +1,55 @@
+---
+title: Contracts
+description: The three kinds of contracts between Suitehive parts (REST, RPC and events), where each is defined and the rules for changing them.
+sidebar:
+  order: 3
+---
+
+**What you'll learn:** how Suitehive's parts agree on the shape of the data they exchange, and where those agreements are written down.
+
+All contracts live in the [contracts](https://github.com/Suitehive/contracts) repository. Services and web apps depend on the contracts, never on each other's code.
+
+## Three kinds
+
+| Kind | Used for | Format | Location |
+|---|---|---|---|
+| REST API | Web apps and API clients talking to a service | OpenAPI 3.1 | `openapi/auth.yaml`, `openapi/mail.yaml`, `openapi/calendar.yaml` |
+| RPC | One service asking another for an immediate answer | Protobuf, served with ConnectRPC (gRPC-compatible, over HTTP) | `proto/suitehive/<service>/v1/` |
+| Events | One service announcing that something happened | Protobuf payloads inside a common envelope | `proto/suitehive/events/` |
+
+## The RPC services today
+
+| Service | RPC | Used by |
+|---|---|---|
+| Auth | `Directory` (look up users, addresses, groups; stream a full snapshot) | Mail |
+| Auth | `ProtocolAuth` (check an app password) | Mail (IMAP, SMTP submission), Calendar (CalDAV) |
+| Auth | `PermissionRegistry` (an app registers its admin permissions at start) | Mail |
+| Auth | `Lifecycle` (confirm a user's data was purged) | No caller yet |
+| Mail | `Sender` (send a system message such as an invitation) | Calendar |
+| Mail | `MessageParts` (read one part of a stored message) | Calendar (invitation replies) |
+| Mail | `MailboxUsage` (storage used by a mailbox) | No caller yet |
+| Calendar | `FreeBusy` (busy times of people and rooms) | No caller yet; open to Mail and Auth |
+
+Every RPC call carries a service token, has a timeout, retries only when it is safe to repeat, and goes through a circuit breaker.
+
+## REST conventions
+
+The three REST APIs share the same rules: JSON with `camelCase`, UTC timestamps, UUIDv7 IDs, cursor pagination, RFC 9457 error bodies with a stable `code`, `ETag` and `If-Match` for safe concurrent edits, and `Idempotency-Key` for safe retries. Paths are `/api/auth`, `/api/admin`, `/api/mail` and `/api/calendar`, without a version prefix.
+
+Browse them in the API reference: [Auth](/docs/api/auth/), [Mail](/docs/api/mail/), [Calendar](/docs/api/calendar/).
+
+## Generated code
+
+- **Go** code for RPC and events is generated from the protobuf files and committed in `gen/go/`, so services need no code generator.
+- **TypeScript** types and typed clients are generated from the OpenAPI files into the `@suitehive/contracts` package, which the web apps use.
+
+## Rules for changing a contract
+
+- Change the contract first, in the same change as the code that implements it.
+- Stay backward compatible: add, never rename or remove.
+- An automatic breaking-change check (`buf breaking`) is set up but has not run in CI yet.
+
+## Next steps
+
+- [Events](/docs/architecture/events/)
+- [API reference (for developers)](/docs/developers/api-reference/)

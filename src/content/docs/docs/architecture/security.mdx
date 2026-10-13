@@ -1,0 +1,71 @@
+---
+title: Security model
+description: How Suitehive signs people in, issues and checks tokens, authenticates mail and calendar apps and services, and encrypts secrets at rest with SH_MASTER_KEY.
+sidebar:
+  order: 6
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how identity, tokens, app passwords and encryption work in Suitehive, and what you must protect as an operator.
+
+<Aside type="caution" title="Early development">
+Suitehive has not had an external security review and is not ready for production use. Report security problems privately to the maintainers.
+</Aside>
+
+## One identity service
+
+Auth is the only place where people sign in. It handles passwords (hashed with argon2id), 2-step verification (authenticator app codes, passkeys, recovery codes), sessions, password resets and invitations. It is also an OpenID Connect (OIDC) provider. Today only the built-in Mail and Calendar clients are registered; registering other applications is planned. An org can also let its users sign in with Google, Microsoft or another OIDC provider; org owners always keep their password as a fallback.
+
+## Browser sessions
+
+- The session lives in an HttpOnly, `__Host-` prefixed cookie, which browsers only accept over HTTPS from the exact host.
+- Every state-changing request needs a CSRF header that matches a second cookie, and a same-origin `Origin` header.
+- Sessions expire after an idle timeout and a maximum age set by the org's security policy.
+- Sensitive changes (security settings, for example) can require a fresh 2-step check ("step-up").
+
+## Access tokens and audiences
+
+The web apps do not send the session cookie to Mail or Calendar. They exchange it at Auth for an **access token**:
+
+| Property | Value |
+|---|---|
+| Format | JWT signed with ES256 |
+| Lifetime | 10 minutes |
+| Audience (`aud`) | The services the token is for, such as `mail`. A service refuses tokens for other audiences. |
+| Contents | User ID, org, session ID, sign-in method, roles and scopes |
+
+Mail and Calendar check each token themselves with Auth's public keys, published at `/jwks`. Auth's signing keys are encrypted at rest and rotated; old public keys stay published until the tokens they signed expire. When a session is revoked or a user is suspended, Auth publishes an event and every service blocks that session's tokens within seconds.
+
+## App passwords
+
+Mail and calendar apps (IMAP, SMTP submission, CalDAV) cannot use a browser sign-in. Users create a separate **app password** per device, limited to the protocols it needs (`imap`, `smtp`, `caldav`). Mail and Calendar check it through Auth, cache a successful result for a few minutes, and drop the cache when the password is revoked. Whether app passwords may be used at all is an org security setting.
+
+## Service-to-service calls
+
+Each service has its own identity in Auth (`svc:mail`, `svc:calendar`) with a client secret. It gets short-lived tokens with OAuth2 client credentials and attaches them to every call. The receiving service checks the token and an allow-list of which services may call which method.
+
+## Encryption at rest
+
+Secrets stored in the databases (DKIM private keys, authenticator app seeds, token signing keys, external sign-in client secrets, smarthost credentials) are encrypted with envelope encryption (AES-256-GCM): each secret gets its own data key, and that key is encrypted with the master key from `SH_MASTER_KEY`.
+
+| Fact | Detail |
+|---|---|
+| Format | 32 random bytes, base64 (`openssl rand -base64 32`). A list `id:key,id:key` is also accepted; the first key encrypts, all keys decrypt. |
+| Who sets it | `suitehive install` generates it and writes it to `.env` (readable only by its owner). |
+| Development | Auth and Mail use a fixed, insecure development key when the dev seed is on. Auth refuses to start in production without a real key. |
+| If you lose it | Encrypted data (keys, 2-step seeds, tokens) cannot be recovered. Back it up; `suitehive backup` includes it. |
+
+Session tokens, app passwords, API tokens and reset links are not encrypted but stored only as SHA-256 hashes and compared in constant time.
+
+## Other controls
+
+- Sign-in is rate limited per IP address and per account, including app-password checks for IMAP, SMTP and CalDAV. Web sign-in locks an account after 10 failed attempts.
+- Sign-in failures look the same whether or not the account exists.
+- Privileged admin actions are written to the audit log.
+- Each org's data is isolated by PostgreSQL Row Level Security. See [Multi-tenancy](/docs/architecture/multi-tenancy/).
+
+## Next steps
+
+- [Auth tokens (for developers)](/docs/developers/concepts/auth-tokens/)
+- [Admin: security policies](/docs/admin/security-policies/)
+- [Self-hosting: backups](/docs/self-hosting/backups/)

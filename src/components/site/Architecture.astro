@@ -1,0 +1,72 @@
+---
+// A simple, readable picture of what runs on the server (from suitehive/README.md "What gets installed").
+---
+<figure class="arch" aria-labelledby="arch-cap">
+  <div class="col">
+    <p class="col-title">Your team</p>
+    <div class="node plain"><strong>Browsers</strong><span>Mail, Calendar, Admin web apps</span></div>
+    <div class="node plain"><strong>Mail and calendar apps</strong><span>Thunderbird, Apple Mail, phones</span></div>
+    <div class="node plain"><strong>Other mail servers</strong><span>Gmail, Outlook, everyone else</span></div>
+  </div>
+
+  <div class="arrow" aria-hidden="true"><span></span></div>
+
+  <div class="col">
+    <p class="col-title">Front door</p>
+    <div class="node tone-slate tall">
+      <strong>Caddy</strong>
+      <span>HTTPS with automatic certificates, routes each path to its app</span>
+      <code>443</code>
+    </div>
+    <p class="side">Mail protocols go straight to Mail: <code>25</code> <code>465</code> <code>587</code> <code>993</code></p>
+  </div>
+
+  <div class="arrow" aria-hidden="true"><span></span></div>
+
+  <div class="col">
+    <p class="col-title">Apps</p>
+    <div class="node tone-lavender"><strong>Auth</strong><span>Sign-in, SSO, 2-step, admin console</span></div>
+    <div class="node tone-sky"><strong>Mail</strong><span>Web app, IMAP, SMTP, spam checks</span></div>
+    <div class="node tone-butter"><strong>Calendar</strong><span>Web app, CalDAV, invitations</span></div>
+  </div>
+
+  <div class="arrow" aria-hidden="true"><span></span></div>
+
+  <div class="col">
+    <p class="col-title">Data</p>
+    <div class="node plain"><strong>PostgreSQL</strong><span>One database per app</span></div>
+    <div class="node plain"><strong>NATS JetStream</strong><span>Events between apps</span></div>
+    <div class="node plain"><strong>Mail storage</strong><span>Messages and attachments on disk</span></div>
+  </div>
+  <figcaption id="arch-cap">Everything runs with Docker Compose in one directory, <code>/opt/suitehive</code> by default.</figcaption>
+</figure>
+
+<style>
+  .arch {
+    margin: 0; display: grid; grid-template-columns: 1fr 36px 1fr 36px 1fr 36px 1fr; align-items: stretch;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 28px; padding: 32px;
+  }
+  .col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .col-title { font-size: 0.76rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--subtle); margin: 0 0 4px; }
+  .node { border-radius: 16px; padding: 14px 16px; display: flex; flex-direction: column; gap: 3px; flex: 1; justify-content: center; }
+  .node.plain { background: var(--paper); border: 1px solid var(--line); }
+  .node strong { font-family: var(--display); font-weight: 700; letter-spacing: -0.02em; font-size: 1.06rem; }
+  .node span { font-size: 0.86rem; color: var(--muted); line-height: 1.4; }
+  :global(:root[data-theme='dark']) .node[class*='tone-'] span { color: var(--ink); opacity: 0.8; }
+  .node.tall { flex: 2; }
+  .node code, .side code { font-size: 0.78rem; padding: 2px 7px; border-radius: 6px; background: var(--surface); width: fit-content; margin-top: 6px; }
+  .side { margin: 0; font-size: 0.84rem; color: var(--muted); line-height: 1.9; flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 0 4px; padding: 6px 2px; }
+  .side code { margin: 0; background: var(--paper-2); }
+  .arrow { display: grid; place-items: center; padding-top: 24px; }
+  .arrow span { width: 18px; height: 2px; background: var(--line-strong); position: relative; }
+  .arrow span::after { content: ''; position: absolute; right: -1px; top: -4px; width: 8px; height: 8px; border: solid var(--line-strong); border-width: 2px 2px 0 0; transform: rotate(45deg); }
+  figcaption { grid-column: 1 / -1; margin-top: 22px; font-size: 0.88rem; color: var(--subtle); }
+  figcaption code { font-size: 0.86em; }
+  @media (max-width: 960px) {
+    .arch { grid-template-columns: 1fr; padding: 20px; gap: 0; }
+    .arrow { padding: 10px 0; }
+    .arrow span { width: 2px; height: 18px; }
+    .arrow span::after { right: -4px; top: auto; bottom: -1px; transform: rotate(135deg); }
+    .node.tall { flex: none; }
+  }
+</style>

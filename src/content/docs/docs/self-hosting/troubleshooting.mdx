@@ -1,0 +1,124 @@
+---
+title: Troubleshooting
+description: Fixes for the most common install and operation problems, from image pulls to blocked ports and cookies.
+sidebar:
+  order: 10
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how to diagnose and fix the problems people hit most often when installing and running Suitehive.
+
+Start with these two commands. Most problems show up in one of them:
+
+```sh
+suitehive status
+suitehive logs <service> --tail 200
+```
+
+## Install problems
+
+### Images can't be pulled
+
+`docker compose pull` fails for `ghcr.io/suitehive/auth`, `mail` or `calendar` (for example "manifest unknown" or "denied").
+
+The images are **not published yet**. Until the first release, use one of:
+
+```sh
+suitehive install --dry-run   # write the files and show what would run
+suitehive install --build     # clone the source into <dir>/src and build the images (needs git)
+```
+
+A source build takes a while the first time. If it stops with "missing auth/Dockerfile", the cloned repos don't contain Dockerfiles at that ref.
+
+### "Suitehive needs at least 4 GB"
+
+The installer stops when the machine has less than about 3.5 GiB of memory. The stack uses about 400 MB at idle, so a smaller machine can work for a trial: pass `--skip-checks`. Adding ClamAV needs 1 to 1.5 GB more.
+
+### "ports already in use"
+
+Another program listens on a port Suitehive needs (80, 443, 25, 465, 587, 993, or 8081 on loopback; 8080, 8443 and 8081 for `--local`). Stop the other web or mail server, or change the host port in `.env` (`SH_HTTP_PORT`, `SH_AUTH_LOCAL_PORT`, ...). Changing the public mail and web ports breaks mail delivery and certificates, so only do that for a trial.
+
+### "the Docker daemon is not reachable"
+
+Start Docker (`sudo systemctl start docker`, or Docker Desktop on macOS and Windows). If it runs but you're not root, add your user to the `docker` group and log in again:
+
+```sh
+sudo usermod -aG docker "$USER"
+```
+
+The old `docker-compose` v1 isn't supported; install the Compose v2 plugin (`docker-compose-plugin`).
+
+### "auth did not become healthy"
+
+The CLI waits 180 seconds for Auth's `/healthz`. Read why it didn't start:
+
+```sh
+suitehive logs auth --tail 100
+```
+
+Common causes: PostgreSQL not ready yet on a slow disk (run `suitehive install` again), or a changed `SH_POSTGRES_PASSWORD` that no longer matches the database volume. For slow machines, wait longer with `SH_HEALTH_TIMEOUT=600 suitehive install`.
+
+### Setup did not finish from the command line
+
+If the installer couldn't create your organization and admin, open `https://<your hostname>/setup` in a browser once DNS and TLS work, or run `suitehive install` again after fixing what `suitehive logs auth` reports. Setup only runs once: if it already completed, sign in with the existing admin.
+
+## Network and DNS
+
+### Port 25 is blocked
+
+Many cloud providers block **outbound** port 25. Outgoing mail then stays queued and is retried for up to 5 days. Test from the server:
+
+```sh
+nc -vz -w 5 gmail-smtp-in.l.google.com 25
+```
+
+If it times out, ask your provider to unblock port 25, or send through a [smarthost relay](/docs/self-hosting/smarthost/).
+
+If **inbound** mail doesn't arrive, check from another network that port 25 on your hostname answers, check your firewall, and check the MX record with `suitehive dns --check`.
+
+### The domain doesn't verify
+
+<Aside type="tip">
+DNS changes can take a while to show up. `suitehive dns --check` reads public DNS, which lags behind your DNS panel by the record's TTL.
+</Aside>
+
+- Run `suitehive dns --check` and fix every record marked missing or different.
+- Many DNS panels add your domain to the name automatically. Enter only the part before `.example.com`, or `@` for the domain itself. A record named `_dmarc.example.com.example.com` is a common mistake.
+- The verification record is a TXT record on the domain itself (`@`) with the value `suitehive-verification=...`, exactly as shown and without extra quotes. It can sit next to your SPF record.
+- DKIM appears only after the domain verifies. See [Domains](/docs/admin/domains/).
+
+### TLS certificate isn't issued
+
+Caddy needs an A/AAAA record pointing at the server and ports 80 and 443 open from the internet. Check `suitehive logs caddy`. See [TLS and certificates](/docs/self-hosting/tls/).
+
+## Sign-in problems
+
+### Sign-in doesn't stick over plain HTTP
+
+You sign in and land back on the login page, or forms fail with a CSRF error. Auth's cookies use the `__Host-` prefix and `Secure` flag, which browsers only accept over HTTPS (or on `localhost` in a local trial).
+
+- On a server, always use `https://`. If another proxy terminates TLS, keep `SH_PUBLIC_URL` on `https://`; see [TLS](/docs/self-hosting/tls/#behind-another-tls-proxy).
+- In a local trial, open `http://localhost:8080`, not the machine's IP address. `install --local` sets `SH_DEV_INSECURE_COOKIES=true` for this.
+- Passkeys don't work when the URL is an IP address.
+
+### Invitation and password-reset emails don't arrive
+
+Auth sends its email over SMTP to `SH_EMAIL_SMTP_URL` (default `smtp://mail:587`). Mail's submission port only accepts mail without a login from `SH_SMTP_TRUSTED_NETWORKS` (loopback by default), and Auth connects from the Docker network. This is a known gap in the current installer. Look for the error in `suitehive logs auth`, and point `SH_EMAIL_SMTP_URL` in `.env` at an SMTP relay with credentials:
+
+```sh title=".env"
+SH_EMAIL_SMTP_URL=smtp://user:password@smtp.relay.example.net:587
+```
+
+Then run `docker compose up -d` in the install directory.
+
+## Mail apps
+
+### Mail apps warn about the certificate
+
+Mail uses Caddy's certificate for IMAP and SMTP. Until Caddy has one, and always in a local trial or behind another TLS proxy, Mail uses a self-signed certificate. Fix TLS issuance first, then restart Mail: `cd /opt/suitehive && docker compose restart mail`.
+
+## Next steps
+
+- [Logs](/docs/self-hosting/logs/)
+- [Monitoring](/docs/self-hosting/monitoring/)
+- [FAQ](/docs/faq/)

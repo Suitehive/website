@@ -1,0 +1,108 @@
+---
+title: Add a right-click menu
+description: Add a right-click (and touch long-press) menu to a row or item with the ContextMenu components from @suitehive/ui.
+sidebar:
+  order: 5
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how to wrap an item in a right-click menu, and the rules every context menu in Suitehive follows.
+
+`@suitehive/ui` exports a set of `ContextMenu` components built on Radix. They open on right-click, on a long press on touch screens, and from the keyboard with Shift+F10 or the Menu key on the focused item. They look the same as the regular dropdown `Menu`.
+
+## Steps
+
+<Steps>
+
+1. **Import the pieces you need.**
+
+   ```tsx title="mail/web/src/features/labels/components/mail-sidebar.tsx"
+   import {
+     ContextMenu,
+     ContextMenuContent,
+     ContextMenuItem,
+     ContextMenuSeparator,
+     ContextMenuSub,
+     ContextMenuSubContent,
+     ContextMenuSubTrigger,
+     ContextMenuTrigger,
+   } from '@suitehive/ui';
+   ```
+
+2. **Wrap the target and list the actions.**
+
+   `ContextMenuTrigger asChild` makes your existing element the target, without adding a wrapper element. This is the menu on a folder in Mail's sidebar:
+
+   ```tsx title="mail/web/src/features/labels/components/mail-sidebar.tsx"
+   <ContextMenu>
+     <ContextMenuTrigger asChild>
+       <NavItem asChild icon={ICONS[folder.id]} label={folder.name} active={active} /* ... */>
+         <Link to="/mail/$folder" params={{ folder: folder.id }} />
+       </NavItem>
+     </ContextMenuTrigger>
+     <ContextMenuContent className="w-56">
+       <ContextMenuItem icon={<CheckCheck />} onSelect={() => void markAllRead(role, folder.name)}>
+         Mark all as read
+       </ContextMenuItem>
+       {purgeable && (
+         <>
+           <ContextMenuSeparator />
+           <ContextMenuItem icon={<Trash2 />} tone="danger" onSelect={() => askEmpty(purgeable)}>
+             Empty {folder.name}
+           </ContextMenuItem>
+         </>
+       )}
+     </ContextMenuContent>
+   </ContextMenu>
+   ```
+
+   `ContextMenuItem` takes an `icon`, an optional `shortcut` (shown as a key hint) and `tone="danger"` for destructive actions. Use `ContextMenuSub`, `ContextMenuSubTrigger` and `ContextMenuSubContent` for a submenu such as "Move to".
+
+3. **Make every action reachable without a mouse.**
+
+   A context menu is a shortcut, never the only way. Put each action in a toolbar, the item's `…` menu, or a keyboard shortcut too. The Auth web app does this with one action list rendered two ways:
+
+   ```tsx title="auth/web/src/shared/ui/actions.tsx"
+   /**
+    * One action list rendered both as a right-click ContextMenu and as the row's `…` Menu, so every
+    * context-menu action also exists somewhere else (07 §8). Order: most-used first, groups split by
+    * separators, destructive last in danger tone.
+    */
+   export type Action =
+     | {
+         id: string;
+         label: ReactNode;
+         icon?: ReactNode;
+         shortcut?: string;
+         tone?: 'default' | 'danger';
+         disabled?: boolean;
+         onSelect?: () => void;
+         /** Submenu (e.g. Assign role ▸). */
+         items?: Action[];
+       }
+     | { separator: true; id: string }
+     | { label: ReactNode; heading: true; id: string };
+   ```
+
+   In Auth, build a list of `Action` values once and pass it to `ContextActions` (the right-click menu) and to the row's `…` menu.
+
+4. **Check it.**
+
+   Right-click the item, then try the keyboard: focus the item with Tab and press Shift+F10. On a phone or in your browser's device mode, long-press it.
+
+</Steps>
+
+## Rules
+
+- Order actions by use: most-used first, groups split by separators, destructive actions last with `tone="danger"`.
+- Ask for confirmation before anything that cannot be undone (as "Empty Trash" does).
+- The menus each app should have are listed in the design documents: `07-ui-design-system.md` section 8, `08-ui-auth-admin.md` section 5, `09-ui-mail.md` section 6, and `10-ui-calendar.md` section 3.
+
+<Aside type="note">
+`ContextMenuContent` renders in a portal and keeps 12 px away from the screen edges, so menus near the edge of a window stay visible.
+</Aside>
+
+## Next steps
+
+- [Add a UI screen](/docs/developers/recipes/ui-screen/)
+- [Write a test](/docs/developers/recipes/tests/)

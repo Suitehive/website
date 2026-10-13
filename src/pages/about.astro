@@ -1,0 +1,53 @@
+---
+import Base from '../layouts/Base.astro';
+---
+<Base title="About" description="Why Suitehive exists: an open-source workspace that respects privacy, speaks open standards and stays calm to use.">
+  <section class="page-hero">
+    <div class="glow" aria-hidden="true"></div>
+    <div class="wrap">
+      <p class="eyebrow reveal">About</p>
+      <h1 class="display reveal">Software you can own.</h1>
+      <p class="lead reveal">Suitehive is an open-source workspace for teams that want their mail, calendars and accounts on their own server.</p>
+    </div>
+  </section>
+
+  <section class="wrap body">
+    <div class="prose reveal">
+      <p>Most teams run their day on a hosted suite. It works, but it comes with a trade: your mail and calendars live in someone else’s cloud, the price grows with every person you add, and the rules can change without asking you.</p>
+      <p>Suitehive is the other option. It gives you the everyday tools, Mail, Calendar and one account to sign in to both, as software you run yourself. Install it on one server, point your domain at it, and it’s yours.</p>
+    </div>
+
+    <div class="values">
+      <article class="card tone-mint reveal">
+        <h2 class="h3">Privacy</h2>
+        <p>No ads, no profiling, no reading your mail to sell you things. Remote images in email stay blocked until you allow them. Your data stays on your disk.</p>
+      </article>
+      <article class="card tone-sky reveal">
+        <h2 class="h3">Standards</h2>
+        <p>IMAP, SMTP, CalDAV, iCalendar and OpenID Connect. You can use the apps you already have, and you can always take your data with you.</p>
+      </article>
+      <article class="card tone-butter reveal">
+        <h2 class="h3">Calm software</h2>
+        <p>Quiet screens, one accent color, fast keyboard shortcuts and nothing that blinks for attention. A workspace people enjoy opening.</p>
+      </article>
+    </div>
+
+    <div class="prose reveal">
+      <h2>Open source, built in the open</h2>
+      <p>Suitehive is split into small repositories that each own one part of the system: the installer, the design documents, a shared Go library, the API contracts, the UI kit, and one repository per app. Services are written in Go and the web apps in React and TypeScript.</p>
+      <p>The license hasn’t been chosen yet. It will be added before the first release. Until then, no license is granted to use, copy or distribute the code.</p>
+      <h2>Where things stand</h2>
+      <p>Suitehive is in <strong>early development</strong>. Auth, Mail and Calendar run together end to end with demo data, but container images aren’t published yet and the project isn’t ready for production mail. The <a href="/roadmap/">roadmap</a> shows what’s next.</p>
+      <h2>Get involved</h2>
+      <p>This is a good time to shape it. Try it locally and tell us what breaks, read the <a href="/docs/architecture/overview/">architecture</a>, or start with <a href="/docs/developers/first-15-minutes/">your first 15 minutes</a> as a contributor. Please report security problems privately to the maintainers instead of opening a public issue.</p>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .body { padding-bottom: 96px; }
+  .values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 56px 0 24px; }
+  .values p { color: var(--muted); margin: 12px 0 0; line-height: 1.55; }
+  :global(:root[data-theme='dark']) .values p { color: var(--ink); opacity: 0.82; }
+  @media (max-width: 860px) { .values { grid-template-columns: 1fr; } }
+</style>

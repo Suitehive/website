@@ -1,0 +1,61 @@
+---
+title: Groups
+description: Create groups with a shared email address, nest them, add outside members and control who can email them.
+sidebar:
+  order: 3
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how to create a group, give it an email address, manage members and decide who can send to it.
+
+Groups collect people for mail distribution and role assignment. Open **Admin › Directory › Groups** (`/admin/groups`). Managing groups needs the `auth.group.manage` permission; viewing needs `auth.group.read`.
+
+## Create a group
+
+<Steps>
+1. Click **Create group**.
+2. Enter a **Name** and, optionally, a **Description**.
+3. Optionally give it a **Group email** on one of your verified domains, for example `sales@example.com`. Mail sent there goes to every member.
+4. Choose **Who can email the group** (see below).
+5. Turn on **Allow outside members** if people outside your organization should get the group's mail.
+6. Create it, then add members.
+</Steps>
+
+<Aside type="note">
+The console can't change a group's email address after creation. The API can (`PATCH /api/admin/groups/{id}` with `email`).
+</Aside>
+
+## Who can email the group
+
+| Option | Who can send to the group email |
+|---|---|
+| **Only members** | Members of the group, including members of nested groups |
+| **Anyone in the organization** (default) | Members and every user of your organization |
+| **Anyone, including outside senders** | Everyone on the internet |
+
+Mail enforces this when a message arrives: a sender who isn't allowed is refused before the message is accepted.
+
+## Members
+
+Open a group and click **Add members**. A member can be:
+
+- **People:** users of your organization.
+- **Group:** another group, whose members then receive the mail too. Groups can be nested up to 5 levels deep; loops are refused.
+- **Outside address:** any external email address. Only when **Allow outside members** is on. You can't turn that setting off while outside members remain.
+
+The members list shows nested groups as a tree. Each member's menu has **Open**, **Copy email** and **Remove from group**. Members have no roles inside a group (there are no group owners or managers).
+
+You can also add a user to a group from their row in **Users** (**Add to group**).
+
+## Groups and roles
+
+You can give a role to a whole group in **Admin › Access › Roles**: everyone in the group gets its permissions. The `owner` role can only go to individual users. See [Roles and permissions](/docs/admin/roles/).
+
+## Delete a group
+
+From the group's row menu, choose **Delete group…**. Its email address is released (mail to it bounces from then on), it is removed from parent groups, and its role assignments are removed. Members keep their own accounts.
+
+## Next steps
+
+- [Roles and permissions](/docs/admin/roles/)
+- [Users](/docs/admin/users/)

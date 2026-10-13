@@ -1,0 +1,39 @@
+---
+import FeaturePage from '../../components/site/FeaturePage.astro';
+import mailThread from '../../assets/screenshots/mail-thread.png';
+import mailThreadDark from '../../assets/screenshots/mail-thread-dark.png';
+import mailInbox from '../../assets/screenshots/mail-inbox.png';
+---
+<FeaturePage
+  pageTitle="Mail"
+  description="Suitehive Mail: a fast, keyboard-friendly inbox on your own domain, with IMAP and SMTP for every mail app."
+  label="Mail"
+  tone="sky"
+  title="Email on your own domain, without the ads."
+  lead="A fast, keyboard-friendly inbox with threads, labels and search. Your messages stay on your server, and desktop and phone mail apps can connect too."
+  shots={[
+    { light: mailThread, dark: mailThreadDark, url: 'suite.example.com/mail', alt: 'Mail with a conversation open: three messages about the Q4 roadmap, with reply, reply all and forward buttons', caption: 'A conversation open in the reading pane.' },
+    { light: mailInbox, url: 'suite.example.com/mail/inbox', alt: 'The Mail inbox with 18 conversations, sender avatars, subjects and dates', caption: 'The inbox, with unread markers and attachment and invitation icons.' },
+  ]}
+  caps={[
+    { title: 'Threads and labels', body: 'Messages are grouped into conversations. Star, archive and file them under labels with pastel colors.' },
+    { title: 'Search with operators', body: 'Narrow results with operators such as <code>from:</code>, <code>has:attachment</code>, <code>filename:</code> and <code>before:</code>.' },
+    { title: 'Compose that forgives', body: 'Drafts save as you type, and you can undo a send for a few seconds. External recipients are flagged before you send.' },
+    { title: 'Filters and vacation replies', body: 'Sort incoming mail automatically, set an out-of-office reply, and keep a signature.' },
+    { title: 'Safer links and attachments', body: 'A warning before you open a link whose text and destination don’t match, and a built-in PDF viewer so attachments open in place.' },
+    { title: 'Keyboard first', body: 'Gmail-style shortcuts: <code>j</code>/<code>k</code> to move, <code>e</code> to archive, <code>r</code> to reply, <code>c</code> to compose, <code>/</code> to search.' },
+    { title: 'Checks on every message', body: 'SPF, DKIM and DMARC are checked on the way in, and outgoing mail is DKIM-signed. Optional rspamd and ClamAV filtering.' },
+    { title: 'Direct delivery or a relay', body: 'Send straight to other mail servers, or through a smarthost if your provider blocks port 25.' },
+    { title: 'Private by default', body: 'No ads, no profiling. Remote images stay blocked until you allow them.' },
+  ]}
+  standards={[
+    { name: 'IMAP', detail: 'Port <code>993</code> over TLS, for Thunderbird, Apple Mail, iOS and Android.' },
+    { name: 'SMTP', detail: 'Submission on <code>587</code> (STARTTLS) and <code>465</code> (TLS). Delivery on <code>25</code>.' },
+    { name: 'App passwords', detail: 'A separate password for each device, which you can revoke on its own.' },
+  ]}
+  docs={[
+    { href: '/docs/user-guide/mail/overview/', label: 'Mail user guide' },
+    { href: '/docs/user-guide/connecting-apps/', label: 'Connect a mail app' },
+    { href: '/docs/getting-started/dns/', label: 'DNS records for mail' },
+  ]}
+/>

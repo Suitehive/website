@@ -1,0 +1,70 @@
+---
+title: Recurring events
+description: Make an event repeat, write custom rules, and choose which occurrences an edit or delete changes.
+sidebar:
+  order: 3
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how to set up a repeating event and how "this event", "this and following" and "all events" work.
+
+## Make an event repeat
+
+In the editor, open **Repeat** and pick a preset. The presets use the event's start date. For an event on
+Tuesday, October 13, 2026 they are:
+
+- Does not repeat
+- Daily
+- Weekly on Tuesday
+- Monthly on the second Tuesday
+- Annually on October 13
+- Every weekday (Monday to Friday)
+- Custom…
+
+## Custom rules
+
+**Custom…** opens a dialog where you set:
+
+| Setting | Options |
+|---|---|
+| Repeat every | A number and a unit (days, weeks, months, years) |
+| Repeat on | For weekly rules: the days of the week |
+| Monthly on | On day 13, on the second Tuesday, or on the last day of the month |
+| Ends | **Never**, **On** a date, or **After** a number of occurrences |
+
+The dialog shows the rule in plain words, for example "Every 2 weeks on Monday and Wednesday". The same text
+appears in the **Repeat** field and in the event details.
+
+Repeating events keep the same local time when daylight saving time starts or ends.
+
+## Change a repeating event
+
+When you edit, move, resize or delete one occurrence of a repeating event, Calendar asks which events to change:
+
+| Choice | What changes |
+|---|---|
+| This event | Only the occurrence you picked. The rest of the series stays as it was |
+| This and following events | The picked occurrence and every one after it. Earlier ones stay as they were |
+| All events | Every occurrence in the series |
+
+Some choices only appear when they make sense. If you change the repeat rule, **This event** isn't offered.
+If you move the event to another calendar, only **All events** is.
+
+If the event has guests, Calendar then asks **Send update to guests?** Choose **Send** to email them the change,
+or **Don't send**.
+
+<Aside type="caution" title="Editing all events">
+Occurrences you changed on their own keep their changes when you edit **All events**. If you change the time or
+the repeat rule, they move by the same amount. An occurrence that no longer falls on a date in the new rule is
+dropped.
+</Aside>
+
+## Reply to a repeating invitation
+
+When you RSVP to a repeating event you were invited to, Calendar asks whether your answer is for
+**This event** or **All events**.
+
+## Next steps
+
+- [Invitations and RSVP](/docs/user-guide/calendar/invitations/)
+- [Create and edit events](/docs/user-guide/calendar/events/)

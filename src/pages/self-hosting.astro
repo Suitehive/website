@@ -1,0 +1,130 @@
+---
+import Base from '../layouts/Base.astro';
+import CopyCommand from '../components/site/CopyCommand.astro';
+import Architecture from '../components/site/Architecture.astro';
+
+const services = [
+  { name: 'caddy', image: 'caddy:2.10', what: 'The public entry point. Gets TLS certificates from Let’s Encrypt and routes /login, /account, /admin and /api/auth to Auth, /mail to Mail, /calendar and /dav to Calendar.' },
+  { name: 'auth', image: 'ghcr.io/suitehive/auth', what: 'Organizations, users, groups, domains, sessions, 2-step verification, the OpenID Connect provider, the admin console and the audit log.' },
+  { name: 'mail', image: 'ghcr.io/suitehive/mail', what: 'The Mail web app and API, SMTP (25, 465, 587), IMAP (993), spam and authentication checks, and the delivery queue.' },
+  { name: 'calendar', image: 'ghcr.io/suitehive/calendar', what: 'The Calendar web app and API, CalDAV, invitations, reminders and free/busy.' },
+  { name: 'postgres', image: 'postgres:17', what: 'One cluster with a separate database per app: suitehive_auth, suitehive_mail and suitehive_calendar.' },
+  { name: 'nats', image: 'nats:2.11-alpine', what: 'The JetStream event bus. Apps talk through events, for example “user created, so create a mailbox”, instead of sharing tables.' },
+];
+---
+<Base title="Self-hosting" description="Run Suitehive on your own Linux server with one command: requirements, sizing, the install command and what gets installed.">
+  <section class="page-hero">
+    <div class="glow" aria-hidden="true"></div>
+    <div class="wrap">
+      <p class="eyebrow reveal">Self-hosting</p>
+      <h1 class="display reveal">One command. One server. <span class="mark">Your domain.</span></h1>
+      <p class="lead reveal">Suitehive installs with Docker Compose on a single Linux VM, gets HTTPS certificates on its own, and comes with backup, restore and upgrade commands.</p>
+    </div>
+  </section>
+
+  <section class="wrap why">
+    <div class="card tone-sky reveal"><h2 class="h3">Your data stays put</h2><p>Mail, calendars and accounts live in your PostgreSQL database and on your disk.</p></div>
+    <div class="card tone-butter reveal"><h2 class="h3">Your rules</h2><p>You choose where it runs, who can sign in, how long data is kept, and when to upgrade.</p></div>
+    <div class="card tone-mint reveal"><h2 class="h3">Your costs</h2><p>No per-seat fees. A 2 vCPU, 4 GB server is enough for a team of 50.</p></div>
+  </section>
+
+  <section class="section" id="install">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <p class="eyebrow">Install</p>
+        <h2 class="h2">Install on a server</h2>
+        <p class="lead">You need a server with a public IP, a domain you control, and ports 25, 80, 443, 465, 587 and 993 reachable. The installer asks for your domain and admin details.</p>
+      </div>
+      <div class="reveal steps">
+        <CopyCommand label="Server install command" command="curl -fsSL https://raw.githubusercontent.com/Suitehive/suitehive/main/install.sh | sh" />
+        <div class="warn">
+          <p><strong>Before the first release:</strong> container images aren’t published yet, so a plain install can’t pull them. Add <code>--dry-run</code> to see exactly what would be installed, or <code>--build</code> to build the images from source.</p>
+        </div>
+        <p class="muted">When it finishes, it prints your URLs (<code>https://suite.example.com/mail</code>, <code>/calendar</code>, <code>/admin</code>), the admin sign-in and the DNS records to create. Want to look first? <a href="/docs/getting-started/quick-start/">Try it on your laptop</a> with demo users.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section req" id="requirements">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <p class="eyebrow">Requirements</p>
+        <h2 class="h2">What you need</h2>
+      </div>
+      <div class="table-wrap reveal">
+        <table class="t">
+          <thead><tr><th scope="col"></th><th scope="col">Server install</th><th scope="col">Local trial</th></tr></thead>
+          <tbody>
+            <tr><td>OS</td><td>Linux (x86_64 or arm64)</td><td>macOS, Linux, or Windows with Docker Desktop</td></tr>
+            <tr><td>Docker</td><td>Docker Engine with Compose v2</td><td>Docker Desktop or Engine with Compose v2</td></tr>
+            <tr><td>Memory</td><td>2 GB minimum, 4 GB recommended</td><td>2 GB free</td></tr>
+            <tr><td>Disk</td><td>10 GB plus your mail</td><td>5 GB</td></tr>
+            <tr><td>Network</td><td>Public IP; inbound 25, 80, 443, 465, 587, 993; outbound 25</td><td>Port 8080 free</td></tr>
+            <tr><td>DNS</td><td>A domain you can add records to</td><td>None</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="h3 sub reveal">Sizing</h3>
+      <p class="muted reveal narrow">Measured at idle with demo data, the whole stack uses about <strong>400 MB of RAM</strong> and <strong>0.7 GB of disk</strong> before any mail is stored.</p>
+      <div class="table-wrap reveal">
+        <table class="t">
+          <thead><tr><th scope="col">Team size</th><th scope="col">CPU</th><th scope="col">RAM</th><th scope="col">Disk</th></tr></thead>
+          <tbody>
+            <tr><td>Trial, up to 10 users</td><td>1 vCPU</td><td>2 GB</td><td>10 GB SSD</td></tr>
+            <tr><td>Small team, up to 50 users</td><td>2 vCPU</td><td>4 GB</td><td>40 GB SSD plus mailbox storage</td></tr>
+            <tr><td>Around 500 users (estimate)</td><td>4 vCPU</td><td>8 GB</td><td>100 GB+, S3-compatible storage for mail</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul class="ticks notes reveal">
+        <li><strong>Mail fills the disk.</strong> Plan for users × average mailbox size: 50 users × 2 GB is about 100 GB.</li>
+        <li><strong>Optional filters cost memory.</strong> ClamAV needs about 1–1.5 GB more RAM, rspamd about 300 MB. With both, 4 GB is the practical minimum.</li>
+        <li><strong>Port 25 is often blocked.</strong> Many cloud providers block outbound port 25. Ask them to open it, or send through a smarthost relay.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="section" id="what-gets-installed">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <p class="eyebrow">What gets installed</p>
+        <h2 class="h2">Six containers in one directory</h2>
+        <p class="lead">Everything lives in <code>/opt/suitehive</code> by default: <code>.env</code> with your settings and generated secrets (readable only by its owner), <code>docker-compose.yml</code>, <code>Caddyfile</code> and <code>backups/</code>.</p>
+      </div>
+      <div class="reveal"><Architecture /></div>
+      <div class="table-wrap reveal services">
+        <table class="t">
+          <thead><tr><th scope="col">Service</th><th scope="col">Image</th><th scope="col">What it does</th></tr></thead>
+          <tbody>
+            {services.map((s) => (<tr><td><code>{s.name}</code></td><td><code>{s.image}</code></td><td>{s.what}</td></tr>))}
+          </tbody>
+        </table>
+      </div>
+      <div class="next reveal">
+        <a class="btn btn-primary" href="/docs/getting-started/quick-start/">Read the quick start</a>
+        <a class="btn btn-ghost" href="/docs/self-hosting/cli/">The suitehive CLI</a>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .display { max-width: 14ch; }
+  .why { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  .why p { color: var(--muted); margin: 10px 0 0; }
+  :global(:root[data-theme='dark']) .why p { color: var(--ink); opacity: 0.82; }
+  .steps { display: grid; gap: 18px; max-width: 760px; }
+  .warn { border-radius: 18px; background: var(--w-butter); padding: 16px 20px; }
+  .warn p { margin: 0; }
+  .muted a { color: var(--accent); }
+  code { font-size: 0.88em; }
+  .req { background: var(--paper-2); }
+  .sub { margin: 56px 0 10px; }
+  .narrow { max-width: 44rem; margin: 0 0 20px; }
+  .notes { margin-top: 28px; max-width: 52rem; }
+  .services { margin-top: 32px; }
+  .services td:nth-child(2) { white-space: nowrap; }
+  .next { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 40px; }
+  @media (max-width: 860px) { .why { grid-template-columns: 1fr; } }
+</style>

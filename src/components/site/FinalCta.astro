@@ -1,0 +1,30 @@
+---
+import CopyCommand from './CopyCommand.astro';
+---
+<section class="final">
+  <div class="wrap">
+    <div class="box reveal">
+      <div class="glow" aria-hidden="true"></div>
+      <h2 class="h2">Try it on your laptop in a few minutes.</h2>
+      <p class="lead">No domain or TLS needed. Suitehive runs at <code>localhost:8080</code> with demo users.</p>
+      <CopyCommand class="cmd-local" label="Local trial command" command="curl -fsSL https://raw.githubusercontent.com/Suitehive/suitehive/main/install.sh | sh -s -- --local" />
+      <div class="actions">
+        <a class="btn btn-primary" href="/docs/getting-started/quick-start/">Read the quick start</a>
+        <a class="btn btn-ghost" href="https://github.com/Suitehive/suitehive">View on GitHub</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .final { padding: 40px 0 80px; }
+  .box { position: relative; overflow: hidden; border-radius: 36px; padding: clamp(40px, 7vw, 88px); background: var(--surface); border: 1px solid var(--line); }
+  .glow { position: absolute; z-index: 0; inset: auto -160px -260px auto; width: 760px; height: 560px; background: radial-gradient(closest-side, var(--sun-glow), transparent 72%); pointer-events: none; }
+  .box > :not(.glow) { position: relative; z-index: 1; }
+  .h2 { max-width: 16ch; }
+  .lead { margin-top: 18px; }
+  .lead code { font-size: 0.9em; }
+  .box :global(.cmd-local) { margin-top: 30px; max-width: 760px; }
+  .actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 28px; }
+  @media (max-width: 640px) { .box { border-radius: 24px; } .actions .btn { flex: 1 1 auto; justify-content: center; } }
+</style>

@@ -1,0 +1,73 @@
+---
+title: Coding principles
+description: The rules every Suitehive backend change follows, in short form, from the engineering principles design document.
+sidebar:
+  order: 5
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** the handful of rules reviewers check on every backend change, and why they exist.
+
+The full text is `docs/design/00-engineering-principles.md` in the [architecture](https://github.com/Suitehive/architecture) repository. If a design document and that file disagree, that file wins. This page is the short version.
+
+## The goal
+
+Code that a small team can maintain for ten years: boring, explicit, tested, and split along clear boundaries. Prefer deleting code to adding abstraction, but never skip a required boundary.
+
+## SOLID, applied
+
+| Principle | What it means here |
+|---|---|
+| **Single responsibility** | One use case is one struct with one method (`Handle`). Write `SuspendUser` and `InviteUser`, not a `UserService` with 40 methods. Packages are named after capabilities (`inbound`, `outbound`), never `utils` or `helpers`. |
+| **Open/closed** | Behavior that will grow gets an interface (a "port") and a list of implementations. Example: inbound mail checks are a chain of `InboundStage` values (SPF, DKIM, DMARC, spam, antivirus). Add a check by adding a stage, not by editing a `switch`. |
+| **Liskov substitution** | Every implementation of a port behaves the same, including the in-memory fakes used in tests. Ports ship with a shared contract test suite, for example `kit/blob/blobtest.Run`. |
+| **Interface segregation** | The code that uses an interface declares it, with only the methods it calls. Prefer `UserReader` and `UserWriter` over one `UserRepository` with 15 methods. |
+| **Dependency inversion** | Use cases never import Postgres, SMTP or RPC clients. They depend on ports; adapters implement them. Everything arrives through constructors: no globals, no `init()` side effects. |
+
+## Boundaries
+
+- A service imports only `kit` and `contracts`. Services talk through RPC (ConnectRPC) or events (NATS JetStream), and events are preferred.
+- No service reads another service's database. If Mail needs Auth's directory on a hot path, it keeps its own copy (a read-model) built from events.
+- Contract changes are backward compatible: add fields, never rename or remove them.
+- Inside a service, a module may import a sibling module's `api/` package only.
+
+## Data and consistency
+
+- Writes run inside `WithinTx`. Repositories take the transaction from `ctx` and never start their own.
+- Events are written to the outbox table in the same transaction as the change. Never publish directly from a use case.
+- Event handlers are idempotent.
+- Changeable records carry a `version`. Updates check it (`WHERE id = $1 AND version = $2`); a mismatch is a conflict, exposed over HTTP as `ETag` and `If-Match`.
+- Every tenant row has `org_id`, and Row Level Security is on. Tests include "org A cannot see org B" cases.
+
+## Errors, time and IDs
+
+- Use the shared error kinds from `kit/kernel` (`NotFound`, `Conflict`, `Invalid`, `Forbidden` and others) with a stable code such as `mail.label.name_taken`.
+- Wrap errors with context. Do not `panic` outside `main`.
+- Never leak internals (SQL, stack traces, whether an email address exists) in messages to clients.
+- Never call `time.Now()` or generate IDs directly in domain or app code. Use the injected `Clock` and `IDGenerator`, so tests can control them.
+
+## Security baseline
+
+- Secrets such as DKIM keys and TOTP seeds are encrypted at rest with `kit/crypto.SecretBox`.
+- Tokens (sessions, app passwords, reset links) are stored only as SHA-256 hashes and compared in constant time.
+- Authorization is checked in the use case, not only in middleware.
+- Every sign-in surface is rate limited. Every privileged admin action writes an audit record.
+- Never log message bodies, passwords, tokens or full email addresses at `info` level.
+
+## Rejected in review
+
+- `utils`, `helpers`, `common` or `manager` packages
+- Business logic in HTTP handlers, SQL or protocol adapters
+- Importing another module's non-`api` package
+- Publishing events outside the transaction that changed the data
+- Boolean flag parameters that switch behavior, like `Send(msg, true, false)`
+
+<Aside type="note" title="Where the code differs from the document">
+The principles document describes REST paths as `/api/v1/...` and specs under `api/openapi/`. The code uses `/api/auth`, `/api/admin`, `/api/mail` and `/api/calendar` without `/v1`, and the specs live in `contracts/openapi/`. Integration tests use the local Docker Postgres through `kit/testkit` instead of testcontainers. A `golangci-lint` and architecture-lint configuration does not exist yet.
+</Aside>
+
+## Next steps
+
+- [Layering inside a service](/docs/developers/concepts/layering/)
+- [Testing](/docs/developers/testing/)
+- [Contributing](/docs/developers/contributing/)

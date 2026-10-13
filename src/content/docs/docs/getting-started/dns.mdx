@@ -1,0 +1,118 @@
+---
+title: DNS setup
+description: The DNS records Suitehive needs for web access, mail delivery, sender authentication and app autodiscovery.
+sidebar:
+  order: 5
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** which DNS records to create, what each one does, and how to check them.
+
+You don't need to type these by hand. The installer prints the exact records for your domain, and so do
+`suitehive dns` and **Admin → Domains**. This page explains them.
+
+## Example records
+
+For the domain `example.com`, with Suitehive at `suite.example.com` on the server IP `203.0.113.10`:
+
+| Type | Name | Value | Purpose |
+|---|---|---|---|
+| A | `suite.example.com` | `203.0.113.10` | The Suitehive host |
+| AAAA | `suite.example.com` | your IPv6 address | Only if the server has IPv6 |
+| TXT | `example.com` | `suitehive-verification=...` | Proves you own the domain |
+| MX | `example.com` | `10 suite.example.com.` | Receive mail |
+| TXT | `example.com` | `v=spf1 mx -all` | SPF: only your MX host sends for this domain |
+| TXT | `sh1._domainkey.example.com` | generated after the domain verifies | DKIM signing key |
+| TXT | `_dmarc.example.com` | `v=DMARC1; p=quarantine; rua=mailto:postmaster@example.com` | DMARC policy |
+| SRV | `_imaps._tcp.example.com` | `0 1 993 suite.example.com.` | Mail app autodiscovery (IMAP) |
+| SRV | `_submissions._tcp.example.com` | `0 1 465 suite.example.com.` | Mail app autodiscovery (sending) |
+| SRV | `_caldavs._tcp.example.com` | `0 1 443 suite.example.com.` | Calendar app autodiscovery |
+| TXT | `_caldavs._tcp.example.com` | `path=/dav/calendars/` | CalDAV path for autodiscovery |
+
+Names are fully qualified. In most DNS panels you enter only the part before `.example.com`, or `@` for
+`example.com` itself.
+
+## What each record does
+
+**A and AAAA** point your Suitehive hostname at your server. Caddy needs them to get a TLS certificate.
+
+**Ownership TXT.** Suitehive won't use a domain until you prove you control it. The value starts with
+`suitehive-verification=` and is unique to your domain. It lives on the domain itself (the apex). The
+installer and **Admin → Domains** show it.
+
+**MX** tells other mail servers to deliver mail for `example.com` to your server.
+
+**SPF** lists the servers allowed to send mail as `@example.com`. `v=spf1 mx -all` means "only the MX host".
+If you send through a smarthost, add the include your relay provider gives you. Keep one SPF record per domain.
+
+**DKIM.** Suitehive signs every outgoing message. The key is generated after the domain is verified, so this
+record appears later. Run `suitehive dns --token <admin token>` again, or open **Admin → Domains**, to get it.
+
+**DMARC** tells receivers what to do with mail that fails SPF and DKIM. Any policy (`p=none`, `p=quarantine`
+or `p=reject`) passes the check. Start with `quarantine`. The Admin checklist suggests `dmarc-reports@` as the
+report address; the CLI suggests `postmaster@`. Either works.
+
+**SRV records** let mail and calendar apps that support DNS discovery find your server from just an email address.
+They're optional. You can always enter the server names by hand. See [Connecting apps](/docs/user-guide/connecting-apps/).
+
+## Optional records
+
+**Admin → Domains** also checks two optional records:
+
+| Type | Name | Value | Purpose |
+|---|---|---|---|
+| TXT | `_smtp._tls.example.com` | `v=TLSRPTv1; rua=mailto:tls-reports@example.com` | TLS reporting |
+| CNAME | `autoconfig.example.com` | your mail host | Autoconfig name for mail apps |
+
+<Aside type="note" title="MTA-STS">
+When Suitehive sends mail directly, it honors the MTA-STS policy of the receiving domain and requires a
+verified TLS connection where that policy asks for it. Publishing an MTA-STS policy for your own domain is not
+automated yet.
+</Aside>
+
+## Reverse DNS (PTR)
+
+Set the PTR record of your server's IP address to your Suitehive hostname, for example
+`203.0.113.10 → suite.example.com`. Many receivers distrust mail from an IP without matching reverse DNS.
+You set PTR at your VPS or hosting provider, not at your DNS host.
+
+## Outbound port 25
+
+Many cloud providers block outbound port 25. Without it, your server can receive mail but can't deliver to
+other servers. Ask your provider to open it, or relay outgoing mail through a
+[smarthost](/docs/self-hosting/smarthost/).
+
+## Check your records
+
+<Steps>
+
+1. Print the records and check which ones exist:
+
+   ```sh
+   suitehive dns --check
+   ```
+
+   Each record is marked found, missing, or different (with the value that was found). The check needs
+   `dig` or `nslookup`.
+
+2. To include the DKIM record, pass an admin API token:
+
+   ```sh
+   suitehive dns --token <admin token>
+   ```
+
+   You can also set `SH_ADMIN_TOKEN` instead of passing `--token`.
+
+3. Open **Admin → Domains** to see the same checklist with copy buttons, live checks and a recheck button.
+
+</Steps>
+
+DNS changes can take a while to spread. If a record shows as missing right after you add it, wait a few
+minutes and check again. Set `SH_PUBLIC_IP` or `SH_PUBLIC_IP6` to skip public IP detection, or `none` to leave
+that record out.
+
+## Next steps
+
+- [Domains in Admin](/docs/admin/domains/)
+- [Smarthost](/docs/self-hosting/smarthost/)
+- [Connecting apps](/docs/user-guide/connecting-apps/)

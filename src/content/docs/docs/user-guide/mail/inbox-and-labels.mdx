@@ -1,0 +1,90 @@
+---
+title: Inbox and labels
+description: Read conversations, archive and star them, and organize mail with nested, colored labels.
+sidebar:
+  order: 2
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how conversations work, how to act on one or many at once, and how to use labels.
+
+## Conversations
+
+Mail groups replies into conversations (threads). The list shows one row per conversation with the senders,
+a count such as "(3)", the subject, a snippet and the time. Unread conversations are bold with a dot at the left.
+
+When you open a conversation, older messages you've read are collapsed to one line. The newest and any unread
+messages are open. Select a collapsed message to expand it.
+
+Opening a conversation marks it read after one second. Change this in **Settings → General → Mark as read**:
+**Immediately**, **After 1 second** or **Manually**.
+
+## Act on conversations
+
+Hover over a row to see quick actions, or right-click it for the full menu. The right-click menu has:
+
+- **Reply**, **Reply all**, **Forward** (one conversation only)
+- **Archive**, **Delete**, **Mark as read** or **Mark as unread**, **Star**
+- **Move to** a folder or label, **Label as** with a checkbox per label and **New label…**
+- **Block** the sender and **Report spam**
+
+**Archive** removes a conversation from the Inbox but keeps it in **All mail** and under its labels.
+**Delete** moves it to Trash.
+
+Every action happens right away and shows a toast with **Undo**. Press `z` to undo the last action.
+
+### Select several
+
+Select the checkbox on each row, press `x` on the row under the keyboard cursor, or press Space on a focused row.
+A bar with bulk actions appears above the list. Press `Esc` to clear the selection.
+
+### Touch screens
+
+On a phone or tablet, swipe a row left or right. By default, swiping right archives and swiping left marks as read.
+Change both in **Settings → General → Swipe right / Swipe left** (Archive, Delete, Mark as read or Nothing).
+
+## Labels
+
+Labels work like folders, except a conversation can have more than one. Your labels appear in the sidebar with
+a colored dot and an unread count.
+
+<Steps>
+
+1. Open the command palette (`Ctrl+K`) and choose **New label**, or use **New label…** in a row's
+   **Label as** menu.
+
+2. Enter a name and pick a color.
+
+3. To nest it, choose a parent in **Nest under**. Don't type `/` in the name; use **Nest under** instead.
+
+</Steps>
+
+To label conversations, press `l` (label as) or `v` (move: add the label and remove it from the Inbox).
+A picker opens with a search box and a checkbox per label. Press Space to toggle and `Ctrl+Enter` to apply.
+You can also drag a conversation onto a label in the sidebar.
+
+Edit, add a sublabel to, or delete a label in **Settings → Labels**, or right-click it in the sidebar.
+Deleting a label doesn't delete the mail under it.
+
+## Inbox categories
+
+Turn on **Settings → General → Inbox categories** to split the Inbox into **Primary**, **Updates** and
+**Promotions** tabs. Categories are backed by your labels. **Updates** uses a label named "Updates" or
+"Notifications"; **Promotions** uses one named "Promotions", "Newsletters" or "Offers". A filter that applies
+such a label sorts mail into that tab. **Primary** is the rest of the Inbox.
+
+## Spam and Trash
+
+Open Spam or Trash and select **Empty now** to delete everything in it permanently. You're asked to confirm.
+
+To rescue a message from Spam, open it and select **Not spam**, or right-click it and choose **Not spam**.
+
+<Aside type="note" title="Snooze and Mute">
+Snooze and Mute are in the menus, but the server doesn't support them yet.
+</Aside>
+
+## Next steps
+
+- [Search](/docs/user-guide/mail/search/)
+- [Filters and settings](/docs/user-guide/mail/filters-and-settings/)
+- [Keyboard shortcuts](/docs/user-guide/mail/shortcuts/)

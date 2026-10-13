@@ -1,0 +1,101 @@
+---
+title: Debug a service
+description: Check whether a Suitehive service is healthy, read its logs, follow a request by its ID, and fix the most common local errors.
+sidebar:
+  order: 7
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how to find out quickly what is wrong with a local service, and the fixes for the errors people hit most.
+
+## 1. Is it up?
+
+Every service answers two endpoints on its HTTP port:
+
+| Endpoint | Answers | Use it for |
+|---|---|---|
+| `/healthz` | `200` as soon as the process serves HTTP | "Is the process alive?" |
+| `/readyz` | `200` only when every dependency check passes, `503` otherwise | "Can it do its work?" |
+
+```sh
+curl -s http://localhost:8081/readyz
+curl -s http://localhost:8082/readyz
+curl -s http://localhost:8083/readyz
+```
+
+```text title="Output (all healthy)"
+{"checks":{"nats":"ok","postgres":"ok"},"status":"ok"}
+{"checks":{"jwks":"ok","nats":"ok","postgres":"ok"},"status":"ok"}
+{"checks":{"jwks":"ok","nats":"ok","postgres":"ok","realtime":"ok"},"status":"ok"}
+```
+
+Read the failing check:
+
+| Check | Means | Fix |
+|---|---|---|
+| `postgres` | The service cannot reach its database | Start Docker: `docker compose -f deploy/dev/docker-compose.yml up -d` |
+| `nats` | The service cannot reach NATS | Same as above; NATS runs in the same compose file |
+| `jwks` | Mail or Calendar cannot download Auth's keys | Start Auth on 8081; check `SH_AUTHN_JWKS_URL` |
+| `realtime` | Calendar's live-update listener is not running | Check the Calendar log for Postgres errors |
+
+The NATS monitoring endpoint answers too: `curl -s http://localhost:8222/healthz` returns `{"status":"ok"}`.
+
+## 2. Read the logs
+
+Services log to standard output as JSON. For local work, switch to text and raise the level:
+
+| Variable | Values | Default |
+|---|---|---|
+| `SH_LOG_FORMAT` | `json`, `text` | `json` |
+| `SH_LOG_LEVEL` | `debug`, `info`, `warn`, `error` | `info` |
+
+Every log line carries `service`, and lines written during a request also carry `request_id`, `org_id`, `user_id` and the trace IDs.
+
+## 3. Follow one request
+
+Every API response has an `X-Request-Id` header, and error bodies repeat it as `requestId`:
+
+```text title="Output: GET /api/mail/labels without a token"
+HTTP/1.1 401 Unauthorized
+Content-Type: application/problem+json
+X-Request-Id: eff0e21bbc6821882160cba6
+
+{"type":"about:blank","title":"Unauthorized","status":401,"detail":"missing, invalid or expired token","code":"common.unauthenticated","requestId":"eff0e21bbc6821882160cba6"}
+```
+
+Search the service log for that ID to see everything that happened during the request.
+
+## Common errors
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Every Mail or Calendar call returns `401 common.unauthenticated` after signing in | The token's issuer does not match the service's `SH_AUTHN_ISSUER`, or the token is for another audience | Use `SH_AUTHN_ISSUER=http://localhost:5171` (Auth's local issuer). Ask for the right audience, such as `["calendar"]` |
+| Sign-in on `http://localhost:5171` loops back to the login page | Auth sets `__Host-` cookies, which browsers only keep over HTTPS | Start Auth with `SH_DEV_INSECURE_COOKIES=true` |
+| Mail rejects every local recipient with `550 5.1.1` | Auth was started with `SH_DEV_TRUST_DOMAINS=true`. It is a list of domain names, so `suitehive.local` stays unverified | Leave `SH_DEV_TRUST_DOMAINS` unset |
+| Mail logs `mail.dkim.selector_taken` after you reset the Auth database | Resetting Auth created a new org ID; Mail still has the old one | Drop and recreate `suitehive_mail` too |
+| The inbox is empty | Mail started before Auth finished seeding | Keep both running; the seed waits for the users. If it still stays empty, run `go run ./mail/cmd/mail directory rebuild` with the same settings |
+| Calendar never logs `dev seed complete` | Calendar is waiting for Auth's user events | Check Auth runs with `SH_DEV_SEED=true` and that both use the same NATS |
+| The service exits because its port is in use, or Vite says the port is in use | Another copy is running | Stop the other process; the ports are fixed |
+| Integration tests "pass" in a second | They skipped because Postgres was down | Run with `SH_TEST_REQUIRE_DB=1 SH_TEST_REQUIRE_NATS=1` |
+| An event handler does nothing | Two copies of the service share one NATS consumer, or the event went to the dead-letter stream | Run one copy. Check `curl -s "http://localhost:8222/jsz?consumers=true"` for your consumer |
+
+To reset the Auth database (and then Mail's, as above):
+
+```sh
+docker exec suitehive-dev-postgres-1 psql -U suitehive -d postgres \
+  -c "DROP DATABASE suitehive_auth" -c "CREATE DATABASE suitehive_auth"
+docker exec suitehive-dev-postgres-1 psql -U suitehive -d postgres \
+  -c "DROP DATABASE suitehive_mail" -c "CREATE DATABASE suitehive_mail"
+```
+
+Stop the services before you drop their databases.
+
+<Aside type="tip" title="Check Auth end to end">
+`go run ./test/smoke -base http://127.0.0.1:8081` (run in `auth/`) checks sign-in, tokens, JWKS, the admin API and service tokens against a running Auth. Use it on a fresh seeded database only: it enrolls 2-step for priya.
+</Aside>
+
+## Next steps
+
+- [Local environment](/docs/developers/local-environment/)
+- [Auth tokens](/docs/developers/concepts/auth-tokens/)
+- [Self-hosting troubleshooting](/docs/self-hosting/troubleshooting/)

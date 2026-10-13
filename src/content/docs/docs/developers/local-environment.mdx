@@ -1,0 +1,130 @@
+---
+title: Local environment
+description: How the development workspace is set up (go.work, npm workspaces, Docker Compose) and every local port and default value.
+sidebar:
+  order: 3
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how the workspace links the repositories together, what Docker runs for you, and which port each part uses.
+
+## The workspace
+
+Suitehive is many repositories, but you work on them as one folder. The workspace root is the [architecture](https://github.com/Suitehive/architecture) repository, with the other repositories cloned inside it. Each subfolder is its own Git repository and is listed in the root `.gitignore`.
+
+```text title="Workspace layout"
+suitehive/              architecture repo: go.work, package.json, docs/design/
+├── kit/                shared Go library
+├── contracts/          OpenAPI, protobuf, generated Go and TypeScript
+├── ui/                 shared React packages
+├── auth/               Auth service + auth/web
+├── mail/               Mail service + mail/web
+├── calendar/           Calendar service + calendar/web
+├── deploy/             deploy/dev/docker-compose.yml
+├── suitehive/          installer and CLI (optional for development)
+└── website/            this website (optional)
+```
+
+[Your first 15 minutes](/docs/developers/first-15-minutes/) has the clone commands.
+
+### Go: `go.work`
+
+The root `go.work` links the Go modules, so a change in `kit` is used by `mail` right away, without publishing a version:
+
+```go title="go.work"
+go 1.27
+
+use (
+	./kit
+	./contracts
+	./auth
+	./mail
+	./calendar
+)
+```
+
+Run Go commands from the root, for example `go build ./mail/...`, or from inside a module folder. Both use `go.work`. To build one module on its own, without the workspace, set `GOWORK=off`.
+
+### JavaScript: npm workspaces
+
+The root `package.json` makes one npm workspace for the TypeScript contracts, the UI packages and the three web apps. Run `npm install` once at the root. pnpm is not used.
+
+```json title="package.json"
+{
+  "name": "suitehive-workspace",
+  "private": true,
+  "workspaces": ["contracts/ts", "ui/packages/*", "auth/web", "mail/web", "calendar/web"],
+  "scripts": {
+    "dev:auth": "npm run dev -w auth/web",
+    "dev:mail": "npm run dev -w mail/web",
+    "dev:calendar": "npm run dev -w calendar/web"
+  }
+}
+```
+
+The UI packages ship TypeScript source. Each web app's Vite build compiles them, so a change in `ui/packages/ui` shows up in a running web app without a build step.
+
+### Docker: Postgres and NATS
+
+```sh
+docker compose -f deploy/dev/docker-compose.yml up -d
+```
+
+This starts Postgres 17 and NATS 2.11 with JetStream. An init script creates three databases on first start. The data lives in the Docker volumes `pgdata` and `natsdata`, so it survives restarts.
+
+## Ports
+
+| What | Address | Notes |
+|---|---|---|
+| Postgres | `localhost:5432` | user and password `suitehive`; databases `suitehive_auth`, `suitehive_mail`, `suitehive_calendar` |
+| NATS JetStream | `nats://localhost:4222` | monitoring at `http://localhost:8222` |
+| Auth API | `http://localhost:8081` | REST, RPC, `/jwks`, `/healthz`, `/readyz` |
+| Mail API | `http://localhost:8082` | REST `/api/mail`, SSE, RPC, `/healthz`, `/readyz` |
+| Mail SMTP (inbound) | `localhost:2525` | STARTTLS, self-signed certificate in development |
+| Mail SMTP submission | `localhost:2587` | STARTTLS, app password |
+| Mail IMAP | `localhost:1143` | STARTTLS, app password |
+| Calendar API | `http://localhost:8083` | REST `/api/calendar`, CalDAV `/dav`, `/healthz`, `/readyz` |
+| Auth web (Vite) | `http://localhost:5171` | `/login`, `/account`, `/admin`, `/setup` |
+| Mail web (Vite) | `http://localhost:5172/mail` | |
+| Calendar web (Vite) | `http://localhost:5173/calendar` | |
+
+The installer uses the standard ports instead (25, 465, 587, 993). See [Self-hosting configuration](/docs/self-hosting/configuration/).
+
+## Local defaults
+
+When `SH_PUBLIC_URL` is unset, Auth and Calendar fill in local development defaults that match the ports above. Mail needs a few more settings; the full command is in [Your first 15 minutes](/docs/developers/first-15-minutes/).
+
+| Setting | Local value | Used by |
+|---|---|---|
+| Token issuer | `http://localhost:5171` (the Auth web app origin) | all three |
+| JWKS URL | `http://localhost:8081/jwks` | Mail, Calendar |
+| Service client secrets | `dev-secret-mail`, `dev-secret-calendar` | Auth, Mail, Calendar |
+| `SH_MASTER_KEY` | a fixed development key (allowed only with `SH_DEV_SEED` or `SH_DEV_INSECURE_COOKIES`) | Auth, Mail |
+| Mail outbound | `SH_OUTBOUND_MODE=local-only` with the dev seed: nothing leaves your machine | Mail |
+| Auth email | logged instead of sent when `SH_EMAIL_SMTP_URL` is unset | Auth |
+
+## Web apps: mock or live
+
+Each web app has an API layer in `src/shared/api/` with two implementations behind one interface:
+
+| `VITE_API_MODE` | What the app talks to |
+|---|---|
+| `mock` (default) | In-memory demo data. No backend needed. |
+| `live` | The real services, through the Vite proxy. |
+
+In live mode, Vite forwards `/api/auth`, `/api/admin`, `/oauth2`, `/.well-known` and `/jwks` to 8081, `/api/mail` to 8082, and `/api/calendar` and `/dav` to 8083. The proxy lives in each app's `vite.config.ts`.
+
+<Aside type="tip" title="Reset the demo data">
+To start Auth over, drop and recreate its database, then also recreate `suitehive_mail`, because Mail keeps a copy of the directory:
+
+```sh
+docker exec suitehive-dev-postgres-1 psql -U suitehive -d postgres \
+  -c "DROP DATABASE suitehive_auth" -c "CREATE DATABASE suitehive_auth"
+```
+</Aside>
+
+## Next steps
+
+- [Repository map](/docs/developers/repo-map/)
+- [Testing](/docs/developers/testing/)
+- [Debug a service](/docs/developers/recipes/debugging/)

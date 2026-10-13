@@ -1,0 +1,38 @@
+---
+title: Multi-tenancy
+description: How one Suitehive installation keeps several organizations' data apart, with an org_id on every row and PostgreSQL Row Level Security.
+sidebar:
+  order: 5
+---
+
+**What you'll learn:** how Suitehive separates organizations' data, and what protects it if application code makes a mistake.
+
+## Organizations
+
+An installation can host more than one organization (org). Each org has its own domains, users, groups, roles, policies, mail and calendars. Users belong to exactly one org, and a domain can be verified by only one org at a time.
+
+## Two layers of protection
+
+1. **In the code.** Every table that holds an org's data has an `org_id` column. The org comes from the signed-in user's token and travels with the request. Repositories read it from there, so callers cannot forget it.
+2. **In the database.** PostgreSQL Row Level Security (RLS) is enabled and forced on every tenant table. At the start of each transaction, the service tells Postgres which org it is working for. A policy on each table then hides every row of other orgs. If no org is set, a query sees nothing.
+
+The second layer means that even a query that forgets to filter by org cannot read or change another org's data.
+
+## Work across organizations
+
+A few tasks must look across orgs, for example finding which org a sign-in email address belongs to, or accepting incoming mail before the recipient's org is known. These run through a separate, clearly named code path with a database role that bypasses RLS. It cannot be used by a request handler by accident.
+
+## How it is checked
+
+- Each service's migration tests fail if a tenant table lacks RLS.
+- Auth's security suite checks that RLS is enabled and forced on every tenant table and partition, that one org cannot see another's rows, and that queries fail closed without an org.
+- Auth serves requests as a database role without superuser rights, because superusers bypass RLS.
+
+## Separate databases per app
+
+On top of this, each app has its own database (`suitehive_auth`, `suitehive_mail`, `suitehive_calendar`). Apps never query each other's databases.
+
+## Next steps
+
+- [Security model](/docs/architecture/security/)
+- [Multi-tenancy and RLS (for developers)](/docs/developers/concepts/multi-tenancy/)

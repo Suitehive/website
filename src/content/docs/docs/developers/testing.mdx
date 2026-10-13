@@ -1,0 +1,91 @@
+---
+title: Testing
+description: The kinds of tests in Suitehive, the commands to run them in each repository, and the settings they read.
+sidebar:
+  order: 6
+---
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+**What you'll learn:** which kinds of tests exist, how to run them, and what they need running.
+
+## Kinds of tests
+
+| Kind | What it checks | Needs | Example |
+|---|---|---|---|
+| Unit | Domain rules and use cases, with in-memory fakes | nothing | `auth/internal/directory/domain/email_test.go` |
+| Contract | An adapter behaves like every other adapter of the same port | depends on the adapter | `kit/blob/blobtest` |
+| Integration | Postgres queries, RLS, outbox and inbox, against real infrastructure | dev Postgres (and NATS for event tests) | `kit/db/tx_test.go`, `mail/internal/mailbox/module_test.go` |
+| End to end (Go) | A whole service, booted the same way as `main.go`, over HTTP | dev Postgres | `auth/test/e2e`, `calendar/test/e2e`, `mail/test/smtpe2e` |
+| Smoke | A running Auth binary, over real HTTP | a running Auth | `auth/test/smoke` |
+| Web | Pure TypeScript logic in a web app | nothing | `calendar/web/test/*.test.ts` |
+
+Integration tests never touch your demo data. Each test creates its own database named `suitehive_test_<random>` and drops it at the end.
+
+## Run the tests
+
+Start the dev infrastructure first (`docker compose -f deploy/dev/docker-compose.yml up -d`). Then, from the workspace root:
+
+```sh
+# shared library and contracts
+go test -count=1 ./kit/... ./contracts/...
+
+# the services (they need the dev Postgres and NATS)
+go test -count=1 ./auth/...
+go test -count=1 ./mail/...
+go test -count=1 ./calendar/...
+
+# web apps
+npm run typecheck --workspaces --if-present
+npm test -w calendar/web
+```
+
+Some suites have extra switches:
+
+| Command | What it adds |
+|---|---|
+| `AUTH_E2E_STRICT_RLS=1 go test ./test/... -count=1` (in `auth/`) | Runs the Auth end-to-end suite with every module on the RLS-restricted database role |
+| `go test ./test/e2e/ -short` (in `auth/`) | Skips the slow timing and load tests |
+| `go run ./test/smoke -base http://127.0.0.1:8081` (in `auth/`) | Drives a running Auth on a fresh, seeded database. It enrolls 2-step for priya, so run it once per fresh database. |
+| `CALENDAR_TEST_DATABASE_URL=postgres://suitehive:suitehive@localhost:5432/postgres?sslmode=disable go test ./...` (in `calendar/`) | Points Calendar's migration tests at the dev Postgres |
+
+## Settings the tests read
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SH_TEST_DATABASE_URL` | `postgres://suitehive:suitehive@localhost:5432/postgres?sslmode=disable` | Must be a role allowed to `CREATE DATABASE` |
+| `SH_TEST_NATS_URL` | `nats://localhost:4222` | JetStream server for event tests |
+| `SH_TEST_REQUIRE_DB` | unset | `1` makes tests fail, instead of skip, when Postgres is down |
+| `SH_TEST_REQUIRE_NATS` | unset | `1` does the same for NATS |
+
+<Aside type="caution" title="Skipped is not passed">
+Without `SH_TEST_REQUIRE_DB=1`, integration tests quietly skip when Postgres is not reachable. CI sets both `REQUIRE` variables. Set them locally before you trust a green run.
+</Aside>
+
+<Tabs syncKey="os">
+<TabItem label="macOS / Linux">
+
+```sh
+SH_TEST_REQUIRE_DB=1 SH_TEST_REQUIRE_NATS=1 go test -count=1 ./kit/...
+```
+
+</TabItem>
+<TabItem label="Windows (PowerShell)">
+
+```powershell
+$env:SH_TEST_REQUIRE_DB = '1'; $env:SH_TEST_REQUIRE_NATS = '1'
+go test -count=1 ./kit/...
+```
+
+</TabItem>
+</Tabs>
+
+## What is not covered yet
+
+- There are no browser tests yet: no Playwright, axe or Storybook. The web apps have type checks and a few logic tests.
+- `kit/outbox` and `kit/rpcx` have no tests of their own; the `inbox` and `rpcauth` tests cover them.
+
+## Next steps
+
+- [Write a test](/docs/developers/recipes/tests/)
+- [Coding principles](/docs/developers/coding-principles/)
+- [Debug a service](/docs/developers/recipes/debugging/)

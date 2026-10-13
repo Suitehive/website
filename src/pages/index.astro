@@ -1,0 +1,291 @@
+---
+import Base from '../layouts/Base.astro';
+import Shot from '../components/site/Shot.astro';
+import CopyCommand from '../components/site/CopyCommand.astro';
+import FeatureRow from '../components/site/FeatureRow.astro';
+import Architecture from '../components/site/Architecture.astro';
+import Faq from '../components/site/Faq.astro';
+import FinalCta from '../components/site/FinalCta.astro';
+import { Picture } from 'astro:assets';
+
+import mailLight from '../assets/screenshots/mail-thread.png';
+import mailDark from '../assets/screenshots/mail-thread-dark.png';
+import calLight from '../assets/screenshots/calendar-week.png';
+import calDark from '../assets/screenshots/calendar-week-dark.png';
+import adminUsers from '../assets/screenshots/admin-users.png';
+import adminUsersDark from '../assets/screenshots/admin-users-dark.png';
+import selfhost from '../assets/brand/feature-selfhost.png';
+
+const install = 'curl -fsSL https://raw.githubusercontent.com/Suitehive/suitehive/main/install.sh | sh';
+
+const why = [
+  { tone: 'sky', title: 'Own your data', body: 'Mail, calendars and accounts live in your database and on your disk, not in someone else’s cloud.' },
+  { tone: 'butter', title: 'One install', body: 'One command sets up HTTPS, PostgreSQL, NATS and the apps on a single VM.' },
+  { tone: 'lavender', title: 'Standard protocols', body: 'IMAP and SMTP for mail, CalDAV for calendars, OpenID Connect for sign-in. Keep the apps you already use.' },
+  { tone: 'mint', title: 'Private by default', body: 'No ads and no profiling of your mail. Remote images in email stay blocked until you allow them.' },
+  { tone: 'peach', title: 'No per-seat fees', body: 'Add your whole team. The only cost is the server you run it on.' },
+  { tone: 'slate', title: 'Open source', body: 'Built in the open, one repository per part. Read the design, run it, change it.' },
+];
+
+const faqs = [
+  { q: 'Can I use Suitehive for my company today?', a: 'Not yet. Suitehive is in early development and isn’t production-ready. Container images haven’t been published, so the installer builds from source (<code>--build</code>) until the first release. Expect breaking changes until v1.' },
+  { q: 'What does it cost?', a: 'There are no per-seat fees. You pay for the server you run it on. The license will be chosen before the first release.' },
+  { q: 'Can I keep using Thunderbird, Apple Mail or my phone?', a: 'Yes. Mail speaks IMAP (993) and SMTP submission (587 and 465), and Calendar speaks CalDAV. Use an app password for each device. See <a href="/docs/user-guide/connecting-apps/">Connecting apps</a>.' },
+  { q: 'What do I need to run it?', a: 'A Linux server with Docker and Compose v2, a domain you can add DNS records to, and ports 25, 80, 443, 465, 587 and 993 open. 2 vCPU and 4 GB RAM is the recommended size for up to 50 users. See <a href="/docs/getting-started/requirements/">Requirements</a>.' },
+  { q: 'Can I move my team over from Google Workspace?', a: 'Import from Google Workspace is on the roadmap, after v1. It isn’t available yet.' },
+  { q: 'What about Contacts, Drive and Docs?', a: 'They come after v1: Contacts with CardDAV, then Drive, then Docs, Sheets and Slides. Each app is its own service, so they can be added without touching the rest.' },
+];
+---
+<Base
+  title="Suitehive: your workspace, on your own server"
+  description="Suitehive is an open-source, self-hostable alternative to Google Workspace: Mail, Calendar and single sign-on for your team, on your own domain and your own server."
+  bareTitle
+>
+  <!-- Hero -->
+  <section class="hero">
+    <div class="glow" aria-hidden="true"></div>
+    <div class="wrap hero-inner">
+      <p class="chip reveal"><span class="dot" aria-hidden="true"></span>Early development: not production-ready yet. <a href="/roadmap/">See the roadmap</a></p>
+      <h1 class="display reveal">Your workspace,<br /> on your <span class="mark">own server.</span></h1>
+      <p class="lead reveal">Mail, Calendar and single sign-on for your team, on your own domain. Open source, self-hosted, and built on the standards your apps already speak.</p>
+      <div class="hero-actions reveal">
+        <a class="btn btn-primary" href="/docs/getting-started/">Get started
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/Suitehive/suitehive">View on GitHub</a>
+      </div>
+      <div class="install reveal">
+        <CopyCommand command={install} />
+        <p class="install-note">Images aren’t published yet. Until the first release, add <code>--build</code> to build from source. <a href="/docs/getting-started/quick-start/">Quick start</a></p>
+      </div>
+    </div>
+    <div class="wrap visual reveal">
+      <Shot class="v-mail" light={mailLight} dark={mailDark} url="suite.example.com/mail" alt="Suitehive Mail with the inbox on the left and a three-message conversation open in the reading pane" eager />
+      <Shot class="v-cal" light={calLight} dark={calDark} url="suite.example.com/calendar" alt="Suitehive Calendar week view with daily stand-ups, a yoga session and a design review" sizes="(min-width: 1180px) 560px, 50vw" />
+    </div>
+    <p class="wrap caption">Real screenshots of the current development build with demo data.</p>
+  </section>
+
+  <!-- Why -->
+  <section class="section" id="why">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <p class="eyebrow">Why Suitehive</p>
+        <h2 class="h2">The tools your team uses every day, under your control.</h2>
+      </div>
+      <div class="why-grid">
+        {why.map((w) => (
+          <article class={`card lift tone-${w.tone} reveal`}>
+            <h3 class="h3">{w.title}</h3>
+            <p>{w.body}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="section features" id="features">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <p class="eyebrow">What’s inside</p>
+        <h2 class="h2">Mail, Calendar and one account for both.</h2>
+        <p class="lead">Each app is its own service with its own database. They share sign-in, the look and feel, and nothing else.</p>
+      </div>
+
+      <FeatureRow tone="sky" label="Mail" title="A fast inbox that works with every mail app." href="/features/mail/"
+        points={[
+          'Threads, labels, stars and search with operators like <code>from:</code> and <code>has:attachment</code>.',
+          'Compose with autosaved drafts, undo send and chips that flag external recipients.',
+          'SPF, DKIM and DMARC checks on the way in; DKIM signing on the way out.',
+          'IMAP and SMTP for desktop and phone apps, with a password per app.',
+        ]}>
+        <Shot light={mailLight} dark={mailDark} url="suite.example.com/mail" alt="Mail reading pane showing a conversation about the Q4 roadmap" sizes="(min-width: 1180px) 680px, 100vw" />
+      </FeatureRow>
+
+      <FeatureRow tone="butter" label="Calendar" title="Plan the week, invite anyone, find a time." href="/features/calendar/" flip
+        points={[
+          'Day, week, month and schedule views with drag to move and resize.',
+          'Recurring events, with edits for one event, this and following, or all.',
+          'Invitations and RSVPs over standard iCalendar email, so Gmail and Outlook users can reply.',
+          'Free/busy, find a time, rooms, sharing per calendar, and CalDAV sync.',
+        ]}>
+        <Shot light={calLight} dark={calDark} url="suite.example.com/calendar" alt="Calendar week view for October 12 to 18" sizes="(min-width: 1180px) 680px, 100vw" />
+      </FeatureRow>
+
+      <FeatureRow tone="lavender" label="Admin and SSO" title="One account for every app, one console to run it." href="/features/admin/"
+        points={[
+          'Sign in once, with passkeys or an authenticator app for 2-step verification.',
+          'Users, groups, roles and domains in one console, with an audit log.',
+          'A DNS checklist that shows each record to create and checks it live.',
+          'Suitehive is an OpenID Connect provider. Registering your other self-hosted tools with it is planned.',
+        ]}>
+        <Shot light={adminUsers} dark={adminUsersDark} url="suite.example.com/admin/users" alt="Admin console users table with names, status, roles and 2-step status" sizes="(min-width: 1180px) 680px, 100vw" />
+      </FeatureRow>
+
+      <FeatureRow tone="mint" label="Self-hosting" title="One command, one VM, your domain." href="/self-hosting/" flip
+        points={[
+          'The installer sets up Docker Compose with automatic HTTPS from Let’s Encrypt.',
+          'Built-in <code>backup</code>, <code>restore</code>, <code>upgrade</code> and <code>dns</code> commands.',
+          'About 400 MB of RAM at idle, measured with demo data.',
+          'Each app can scale on its own when you outgrow one machine.',
+        ]}>
+        <div class="selfhost-img">
+          <Picture src={selfhost} formats={['avif', 'webp']} widths={[640, 960, 1400]} sizes="(min-width: 1180px) 680px, 100vw" alt="Illustration: Suitehive Mail and Calendar open in a browser at suite.example.com" loading="lazy" />
+        </div>
+      </FeatureRow>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section class="section how" id="how-it-works">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <p class="eyebrow">How it works</p>
+        <h2 class="h2">A few small services on one machine.</h2>
+        <p class="lead">A gateway handles HTTPS. Auth signs everyone in. Mail and Calendar check every request with Auth’s public keys and talk to each other through events, never through each other’s database.</p>
+      </div>
+      <div class="reveal"><Architecture /></div>
+      <p class="how-more reveal"><a class="more" href="/docs/architecture/overview/">Read the architecture overview <span aria-hidden="true">→</span></a></p>
+    </div>
+  </section>
+
+  <!-- Sizing -->
+  <section class="section sizing" id="sizing">
+    <div class="wrap sizing-grid">
+      <div class="section-head reveal">
+        <p class="eyebrow">Requirements</p>
+        <h2 class="h2">Smaller than you’d think.</h2>
+        <p class="lead">The whole stack uses about 400 MB of RAM and 0.7 GB of disk at idle, before any mail is stored. Mail is what fills the disk.</p>
+        <p class="sizing-link"><a class="more" href="/self-hosting/">Sizing and requirements <span aria-hidden="true">→</span></a></p>
+      </div>
+      <div class="plans">
+        <div class="card plan reveal">
+          <p class="plan-name">Trial</p>
+          <p class="plan-spec">1 vCPU · 2 GB</p>
+          <p class="plan-note">Up to 10 users</p>
+        </div>
+        <div class="card plan tone-butter reveal">
+          <p class="plan-name">Small team <span class="badge">Recommended</span></p>
+          <p class="plan-spec">2 vCPU · 4 GB</p>
+          <p class="plan-note">Up to 50 users, 40 GB SSD plus mail</p>
+        </div>
+        <div class="card plan reveal">
+          <p class="plan-name">Around 500 users</p>
+          <p class="plan-spec">4 vCPU · 8 GB</p>
+          <p class="plan-note">An estimate until load testing is done</p>
+        </div>
+        <p class="plans-note reveal">ClamAV antivirus adds about 1–1.5 GB of RAM, rspamd about 300 MB.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Roadmap -->
+  <section class="section roadmap" id="roadmap">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <p class="eyebrow">Roadmap</p>
+        <h2 class="h2">Mail and Calendar first. Then the rest of the suite.</h2>
+      </div>
+      <ol class="strip">
+        <li class="reveal now">
+          <p class="when">Now · v1 in progress</p>
+          <ul>
+            <li>Auth and Admin</li><li>Mail</li><li>Calendar</li><li>One-command install, backups, upgrades</li><li>First published container images</li>
+          </ul>
+        </li>
+        <li class="reveal">
+          <p class="when">Next, after v1</p>
+          <ul><li>Contacts with CardDAV</li><li>Drive: files and sharing</li><li>Docs, Sheets and Slides with real-time editing</li><li>Chat</li><li>Import from Google Workspace</li></ul>
+        </li>
+      </ol>
+      <p class="reveal"><a class="more" href="/roadmap/">Full roadmap <span aria-hidden="true">→</span></a></p>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="section faq" id="faq">
+    <div class="wrap faq-grid">
+      <div class="section-head reveal">
+        <p class="eyebrow">FAQ</p>
+        <h2 class="h2">Questions people ask first.</h2>
+        <p class="lead">More answers in the <a href="/docs/faq/">docs FAQ</a>.</p>
+      </div>
+      <Faq items={faqs} />
+    </div>
+  </section>
+
+  <FinalCta />
+</Base>
+
+<style>
+  .hero { padding: 150px 0 40px; position: relative; overflow: hidden; }
+  .glow {
+    position: absolute; z-index: -1; pointer-events: none; top: -180px; right: -220px; width: 980px; height: 760px;
+    background: radial-gradient(closest-side, var(--sun-glow), transparent 70%);
+  }
+  .hero-inner { display: flex; flex-direction: column; align-items: flex-start; }
+  .hero .display { margin-top: 26px; }
+  .hero .lead { margin-top: 26px; }
+  .hero-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 34px; }
+  .install { margin-top: 30px; width: min(100%, 640px); }
+  .install-note { font-size: 0.88rem; color: var(--subtle); margin: 12px 0 0 6px; }
+  .install-note a { color: var(--accent); font-weight: 600; text-underline-offset: 3px; }
+  .visual { position: relative; margin-top: 72px; padding-bottom: 96px; }
+  .visual :global(.v-mail) { width: 86%; position: relative; z-index: 1; }
+  .visual :global(.v-cal) { position: absolute; z-index: 2; right: var(--gutter); bottom: 0; width: 40%; }
+  .caption { font-size: 0.84rem; color: var(--subtle); margin-top: 18px; }
+
+  .why-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  .why-grid .card { padding: 30px 28px 32px; min-height: 196px; }
+  .why-grid p { color: var(--muted); margin: 12px 0 0; line-height: 1.55; }
+  :global(:root[data-theme='dark']) .why-grid .card p { color: var(--ink); opacity: 0.82; }
+
+  .features .section-head { margin-bottom: 24px; }
+
+  .selfhost-img { border-radius: 22px; overflow: hidden; border: 1px solid var(--line); box-shadow: var(--shadow-shot); }
+  .selfhost-img :global(img) { width: 100%; height: auto; }
+
+  .how { background: var(--paper-2); }
+  .how-more { margin-top: 28px; }
+
+  .sizing-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 56px; align-items: start; }
+  .sizing-link { margin-top: 24px; }
+  .plans { display: grid; gap: 12px; }
+  .plan { padding: 22px 26px; display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 4px 16px; }
+  .plan p { margin: 0; }
+  .plan-name { font-weight: 600; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .plan-spec { font-family: var(--display); font-weight: 700; font-size: 1.5rem; letter-spacing: -0.03em; grid-row: span 2; }
+  .plan-note { color: var(--muted); font-size: 0.92rem; }
+  .badge { font-size: 0.74rem; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: var(--surface); color: var(--s-butter); }
+  .plans-note { color: var(--subtle); font-size: 0.9rem; margin: 6px 4px 0; }
+
+  .strip { list-style: none; padding: 0; margin: 0 0 32px; display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-top: 2px solid var(--line); }
+  .strip > li { padding: 22px 28px 0 0; position: relative; }
+  .strip > li::before { content: ''; position: absolute; top: -7px; left: 0; width: 12px; height: 12px; border-radius: 50%; background: var(--paper); border: 2px solid var(--line-strong); }
+  .strip > li.now::before { background: var(--sun); border-color: var(--sun); }
+  .when { font-weight: 600; margin: 0 0 12px; }
+  .strip ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; color: var(--muted); }
+
+  .faq-grid { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: 56px; align-items: start; }
+  .faq .lead a { color: var(--accent); text-underline-offset: 3px; }
+
+  @media (max-width: 960px) {
+    .why-grid { grid-template-columns: 1fr 1fr; }
+    .sizing-grid, .faq-grid { grid-template-columns: 1fr; gap: 8px; }
+    .visual :global(.v-mail) { width: 100%; }
+    .visual :global(.v-cal) { display: none; }
+    .visual { padding-bottom: 0; margin-top: 56px; }
+  }
+  @media (max-width: 640px) {
+    .hero { padding-top: 120px; }
+    .why-grid { grid-template-columns: 1fr; }
+    .why-grid .card { min-height: 0; }
+    .strip { grid-template-columns: 1fr; border-top: 0; border-left: 2px solid var(--line); }
+    .strip > li { padding: 0 0 28px 24px; }
+    .strip > li::before { top: 4px; left: -7px; }
+    .plan { grid-template-columns: 1fr; }
+    .plan-spec { grid-row: auto; }
+    .hero-actions .btn { flex: 1 1 auto; justify-content: center; }
+  }
+</style>

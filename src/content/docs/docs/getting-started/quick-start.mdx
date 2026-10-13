@@ -1,0 +1,125 @@
+---
+title: Quick start
+description: Install Suitehive on a Linux server, or try it locally on macOS, Linux or Windows with demo users.
+sidebar:
+  order: 2
+---
+import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how to install Suitehive on a server, how to try it on your laptop, and which flags
+to use until the first images are published.
+
+<Aside type="caution" title="Images are not published yet">
+`suitehive install` pulls images from `ghcr.io/suitehive/*`, which don't exist yet. Until the first release,
+add one of these flags:
+
+- `--dry-run` writes `.env`, `docker-compose.yml`, `Caddyfile` and `initdb/`, and prints the Docker commands,
+  the setup request (password masked) and the DNS records without running anything in Docker.
+- `--build` clones the Suitehive repositories into `<dir>/src` and builds the images locally. It needs `git`.
+</Aside>
+
+## Install on a server
+
+You need a Linux server with a public IP, a domain you control, and ports 25, 80, 443, 465, 587 and 993 reachable.
+See [Requirements](/docs/getting-started/requirements/).
+
+<Steps>
+
+1. Run the installer. It asks for your domain and admin details.
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/Suitehive/suitehive/main/install.sh | sh -s -- --build
+   ```
+
+2. To run it without questions, pass the answers as flags:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/Suitehive/suitehive/main/install.sh | sh -s -- \
+     --domain example.com \
+     --admin-email admin@example.com \
+     --admin-name "Ada Admin" \
+     --org-name "Example Co" \
+     --build --yes
+   ```
+
+3. When it finishes, it prints your URLs (`https://suite.example.com/mail`, `/calendar`, `/admin`),
+   the admin sign-in and the DNS records to create. If you didn't pass `--admin-password`, the generated
+   password is shown once and stored nowhere. Save it.
+
+4. Create the DNS records. See [DNS setup](/docs/getting-started/dns/).
+
+</Steps>
+
+The default install directory is `/opt/suitehive` when you run as root, otherwise `~/suitehive`.
+Every flag is listed in the [CLI reference](/docs/self-hosting/cli/).
+
+## Try it on your laptop
+
+Local mode needs no domain and no TLS. Suitehive runs at `http://localhost:8080` with a demo
+organization on the domain `suitehive.local`.
+
+<Tabs syncKey="os">
+<TabItem label="macOS / Linux">
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Suitehive/suitehive/main/install.sh | sh -s -- --local --build
+```
+
+</TabItem>
+<TabItem label="Windows (PowerShell)">
+
+Start [Docker Desktop](https://www.docker.com/products/docker-desktop/) first, then:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Suitehive/suitehive/main/install.ps1))) -DryRun
+```
+
+Piping into `iex` can't pass parameters, which is why the command above runs the script as a script block.
+You can also set environment variables first (`$env:SH_DRY_RUN = "1"`, `$env:SH_DIR`, `$env:SH_YES = "1"`)
+and run `irm https://raw.githubusercontent.com/Suitehive/suitehive/main/install.ps1 | iex`.
+
+The Windows installer does not support `-Build`. To build from source on Windows, use WSL and
+`install.sh --local --build`.
+
+</TabItem>
+</Tabs>
+
+Sign in at `http://localhost:8080` with one of the demo users. The password for all of them is `suitehive-dev`.
+
+| Email | Role |
+|---|---|
+| `admin@suitehive.local` | Owner (can open Admin) |
+| `priya@suitehive.local` | Member (Priya Sharma) |
+| `alex@suitehive.local` | Member (Alex Chen) |
+
+In local mode the mail ports move so they don't need root: SMTP 2525, SMTPS 2465, submission 2587 and
+IMAPS 1993 (self-signed certificate).
+
+<Aside type="danger" title="Local mode is for trying it out">
+The local trial uses plain HTTP and demo data. Don't expose it to the internet.
+</Aside>
+
+## From a clone
+
+```sh
+git clone https://github.com/Suitehive/suitehive.git
+cd suitehive
+./bin/suitehive install --local --dry-run
+```
+
+Read the files it writes to see exactly what a real install would run.
+
+## Check that it's running
+
+```sh
+suitehive status
+```
+
+This shows each service, its health, the installed version and your URLs. Use `suitehive logs [service]`
+to see the last log lines.
+
+## Next steps
+
+- [First sign-in](/docs/getting-started/first-sign-in/)
+- [DNS setup](/docs/getting-started/dns/)
+- [Requirements and sizing](/docs/getting-started/requirements/)

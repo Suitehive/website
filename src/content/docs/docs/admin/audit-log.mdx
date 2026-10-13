@@ -1,0 +1,59 @@
+---
+title: Audit log
+description: See who changed what in your organization, filter the log, follow it live, and know how long entries are kept.
+sidebar:
+  order: 8
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** what the audit log records, how to search and filter it, and how retention works.
+
+Open **Admin**, then **Activity › Audit log** (`/admin/audit`). Reading the log needs the `auth.audit.read` permission.
+
+## What is recorded
+
+Every sign-in and every administrative change, with its actor, target, service, IP address, device, request ID and outcome (**success**, **failure** or **denied**). Examples of actions:
+
+| Area | Actions |
+|---|---|
+| Sign-in | `auth.login`, `auth.login.federated`, `auth.logout`, `auth.protocol.login` (IMAP, SMTP, CalDAV) |
+| Credentials | `auth.password.change`, `auth.password_reset.request`, `auth.mfa.totp.enroll`, `auth.mfa.webauthn.register`, `auth.mfa.recovery_code_used`, `auth.app_password.create`, `auth.app_password.revoke`, `auth.token.create` |
+| Sessions | `auth.session.revoke`, `auth.session.revoke_others` |
+| Users | `auth.user.invite`, `auth.user.update`, `auth.user.suspend`, `auth.user.reactivate`, `auth.user.delete`, `auth.user.reset_mfa`, `auth.user.reset_password`, `auth.user.alias.add`, `auth.invitation.accept` |
+| Groups and roles | `auth.group.*`, `auth.role.create`, `auth.role.assign`, `auth.role.unassign` |
+| Domains | `auth.domain.add`, `auth.domain.verify`, `auth.domain.degraded`, `auth.domain.remove` |
+| Organization | `auth.org.update`, `auth.org.policy.update`, `auth.idp.create`, `auth.setup.bootstrap` |
+| OpenID Connect | `auth.oidc.consent`, `auth.oidc.grant_revoke`, `auth.oidc.refresh_reuse` |
+
+Auth is built to collect audit events from the other apps too, so the log becomes one place for the whole organization. Mail and Calendar keep their own audit records but don't forward them yet, so today the log shows Auth's entries.
+
+## Search and filter
+
+| Control | What it does |
+|---|---|
+| **Search actor, action or target** | Matches text in the action, actor ID, target ID and details |
+| Service chips | **Directory** (Auth) and one chip per installed app |
+| **Failed**, **Denied** | Show only those outcomes |
+| Date range | Limit to a time window |
+| **Live** | Stream new entries as they happen |
+
+Each row shows Time, Actor, Action, Target, Service, IP and Outcome. Each row's menu has **Open details**, **Filter by this actor**, **Filter by this action** and **Copy as JSON**. The details panel shows the device, request ID and the full entry.
+
+A user's own recent activity (last 20 entries) is also on the **Activity** tab of their page in **Users**, with a link to **Open in audit log**.
+
+## API
+
+`GET /api/admin/audit` returns entries with the filters `q`, `actorId`, `targetId`, `action` (exact, or a prefix such as `auth.user.*`), `service`, `outcome`, `from` and `to`, 50 per page by default (up to 200). `GET /api/admin/audit/stream` is the live feed (server-sent events). See the [Auth API reference](/docs/api/auth/).
+
+<Aside type="note" title="Not available yet: export">
+There is no CSV export for the audit log. Use **Copy as JSON** for single entries or the API for bulk reads.
+</Aside>
+
+## Retention
+
+Entries are kept for 400 days by default. A daily job at 02:05 removes whole months older than that. Change it with `SH_AUDIT_RETENTION` on the Auth service (a duration such as `17520h` for two years; `0` keeps everything). This needs a `docker-compose.yml` edit; see [Configuration](/docs/self-hosting/configuration/).
+
+## Next steps
+
+- [Users](/docs/admin/users/)
+- [Security policies](/docs/admin/security-policies/)

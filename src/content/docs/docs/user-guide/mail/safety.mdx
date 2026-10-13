@@ -1,0 +1,93 @@
+---
+title: Mail safety and attachments
+description: How Mail warns about deceptive links and forged senders, blocks remote images, and opens PDF attachments safely.
+sidebar:
+  order: 7
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** what Mail's warnings mean, and how to preview attachments, including PDFs, without
+downloading them.
+
+## Link warning
+
+Phishing mail often shows one address in the text and links to another. When you select a link whose text
+names a different site than the one it really opens, Mail stops and shows **Possible phishing:
+This link isn't going where it says.**
+
+The dialog shows:
+
+- **The email shows**: the site named in the link text.
+- **It actually opens**: the real site, underlined in red, with the full address below it.
+
+The part of each address that decides the site (for example `example.com` in `login.example.com`) is in bold,
+so look-alike addresses stand out.
+
+Select **Keep me safe** to close the dialog without opening anything. That's the default button.
+Select **Open it anyway** only if you trust the link. If you weren't expecting the message, check with the
+sender another way.
+
+Other links open in a new tab without passing on where you came from. `mailto:` links open a new compose window.
+
+<Aside type="note" title="What counts as a mismatch">
+Mail compares the site in the link text with the site in the link. A link to a subdomain of the site in the
+text (`mail.example.com` when the text says `example.com`) is not flagged. Links whose text isn't an address,
+such as "Click here", are not checked.
+</Aside>
+
+## Sender warnings
+
+Mail checks SPF, DKIM and DMARC on every incoming message. When a message fails these checks or looks
+spoofed, a red banner says **This message may not be from** the sender's domain. Don't reply with personal
+details or open its links.
+
+Other banners:
+
+| Banner | Meaning |
+|---|---|
+| This message looks like spam. | Select **Not spam** if it isn't |
+| An attachment was removed because it contained a virus. | The antivirus filter removed a file (only when your server runs ClamAV) |
+| Images hidden | Remote images are blocked. Select **Show images** or **Always show from sender** |
+
+Message bodies are shown in a sandbox, so scripts in an email can't run.
+
+## Attachments
+
+Attachments appear as cards under the message, with the file name and size. Images and PDFs open in a
+preview; other files download.
+
+## PDF viewer
+
+PDFs open in Suitehive's built-in viewer, in a full-window lightbox. Nothing is sent to an outside service:
+the viewer (based on pdf.js) runs in your browser.
+
+- Scroll through pages, or type a page number in the toolbar.
+- Zoom with the toolbar, `Ctrl` and the mouse wheel, or pinch on a touchpad or touch screen.
+- Use the thumbnail rail on the left to jump between pages.
+- Select and copy text, and search with **Find**.
+- Rotate, download or print from the toolbar.
+- Password-protected PDFs ask for the password. If a file can't be shown, you can still download it.
+
+Links inside a PDF go through Mail's link handling: web links open in a new tab and `mailto:` links open
+compose. Mail only knows the link's address, not the text shown on the page, so the mismatch warning above
+can't check PDF links. Look at the address before you trust it.
+
+Keys work while the viewer has focus. On a Mac, `Ctrl` means `⌘`.
+
+| Keys | Action |
+|---|---|
+| `→` or `PgDn` | Next page |
+| `←` or `PgUp` | Previous page |
+| `Home` / `End` | First / last page |
+| `+` / `-` | Zoom in / out (also with `Ctrl`) |
+| `0` | Fit to width (also `Ctrl+0`) |
+| `r` / `Shift+R` | Rotate clockwise / counterclockwise |
+| `Ctrl+F` | Find |
+| `Ctrl+P` | Print |
+| `Ctrl+S` | Download |
+| `Esc` | Close the find bar, then the viewer |
+
+## Next steps
+
+- [Mail keyboard shortcuts](/docs/user-guide/mail/shortcuts/)
+- [Inbox and labels](/docs/user-guide/mail/inbox-and-labels/)

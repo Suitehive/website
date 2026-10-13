@@ -1,0 +1,25 @@
+---
+import Base from '../layouts/Base.astro';
+import HiveMark from '../components/HiveMark.astro';
+---
+<Base title="Page not found" description="This page doesn’t exist.">
+  <section class="page-hero nf">
+    <div class="glow" aria-hidden="true"></div>
+    <div class="wrap">
+      <div class="cells" aria-hidden="true"><HiveMark size={72} /></div>
+      <p class="eyebrow">404</p>
+      <h1 class="display">This cell is empty.</h1>
+      <p class="lead">The page you’re looking for doesn’t exist or has moved.</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="/">Go to the home page</a>
+        <a class="btn btn-ghost" href="/docs/">Browse the docs</a>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .nf { min-height: 72vh; padding-bottom: 96px; }
+  .cells { margin-bottom: 28px; transform: rotate(-4deg); width: fit-content; }
+  .actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 32px; }
+</style>

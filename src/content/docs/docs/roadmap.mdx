@@ -1,0 +1,56 @@
+---
+title: Roadmap
+description: What Suitehive v1 includes, what is still open, and which apps come after it.
+sidebar:
+  order: 2
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** where Suitehive stands, what has to happen before v1, and what is planned next.
+
+<Aside type="note">
+This roadmap describes direction, not dates. Plans can change, and nothing here is a promise of when a feature ships.
+</Aside>
+
+## v1 (in progress)
+
+The goal of v1 is a self-hosted Mail, Calendar and single sign-on suite that one command installs on one server.
+
+| Area | Scope | State |
+|---|---|---|
+| Auth and Admin | Organizations, domains, users, groups, roles, passkeys and 2-step, OpenID Connect, audit log, first-run setup | Built; being integrated and tested |
+| Mail | Web app, SMTP in and out, IMAP, threads, labels, search, filters, DKIM/SPF/DMARC | Built; being integrated and tested |
+| Calendar | Web app, recurrence, invitations, free/busy, rooms, reminders, CalDAV | Built; being integrated and tested |
+| Install and operations | One-command install, backups, upgrades | Installer and CLI built; not yet tested on a real server |
+| Release | Published container images | Not done |
+
+### Open before v1
+
+These are the known gaps from the latest round of work:
+
+- **Release:** publish container images to `ghcr.io/suitehive/*`, then test the installer, backup, restore and upgrade on a real VM.
+- **Load testing:** the sizing for around 500 users is an estimate until this is done.
+- **Admin sections for Mail and Calendar** in the admin console (DKIM, outbound queue, smarthost routing, rooms).
+- **System email on a fresh install:** Auth's invitation and reset emails need a submission path that Mail accepts.
+- **Invitations inside your own domain:** Calendar should accept invitation replies sent between people on the same domain.
+- **App passwords:** show the IMAP, SMTP and CalDAV connection details when an app password is created.
+- **Domains:** handle DKIM keys when a domain is removed or moves between organizations.
+- **Account:** uploading a profile photo.
+- A full manual check of all three web apps against the live services.
+
+## Next
+
+After v1, in no particular order:
+
+- **Contacts** with CardDAV sync
+- **Drive** for files and sharing
+- **Docs, Sheets and Slides** with real-time collaboration
+- **Chat**
+- **Import from Google Workspace**
+
+Each new app is its own service with its own database, and joins the same sign-in, admin console and app switcher.
+
+## Next steps
+
+- [Changelog](/docs/changelog/)
+- [FAQ](/docs/faq/)

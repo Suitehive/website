@@ -1,0 +1,90 @@
+---
+title: API reference
+description: Where the Auth, Mail and Calendar REST APIs are defined, the conventions they share, and how to authenticate your calls.
+sidebar:
+  order: 7
+---
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+**What you'll learn:** where the REST APIs are defined, the rules every endpoint follows, and how to get a token to call them.
+
+## The specs
+
+Each service's public REST API is an OpenAPI 3.1 file in the [contracts](https://github.com/Suitehive/contracts) repository. The spec is the source of truth: change it first, then the code.
+
+| Service | Spec | Paths | Browse |
+|---|---|---|---|
+| Auth | `contracts/openapi/auth.yaml` | `/api/auth/*`, `/api/admin/*`, `/oauth2/*`, `/.well-known/*`, `/jwks` | [Auth API](/docs/api/auth/) |
+| Mail | `contracts/openapi/mail.yaml` | `/api/mail/*` | [Mail API](/docs/api/mail/) |
+| Calendar | `contracts/openapi/calendar.yaml` | `/api/calendar/*`, `/ical/*` | [Calendar API](/docs/api/calendar/) |
+
+<CardGrid>
+  <LinkCard title="Auth API" href="/docs/api/auth/" description="Sign-in, sessions, My account, admin console, OIDC." />
+  <LinkCard title="Mail API" href="/docs/api/mail/" description="Threads, messages, drafts, labels, settings, sync." />
+  <LinkCard title="Calendar API" href="/docs/api/calendar/" description="Calendars, events, instances, free/busy, rooms." />
+</CardGrid>
+
+The web apps do not write HTTP calls by hand. `@suitehive/contracts` (in `contracts/ts`) generates TypeScript types from the specs and exports typed clients: `createAuthClient`, `createMailClient` and `createCalendarClient`. After you edit a spec, regenerate and check:
+
+```sh
+npm run generate -w @suitehive/contracts
+npm run lint -w @suitehive/contracts
+npm run typecheck -w @suitehive/contracts
+```
+
+The Go handlers are written by hand against the spec; nothing generates Go code from OpenAPI.
+
+## Conventions every endpoint follows
+
+| Topic | Rule |
+|---|---|
+| Format | JSON with `camelCase` fields. Timestamps are RFC 3339 in UTC. IDs are UUIDv7 strings. |
+| Paths | No version prefix: `/api/mail/labels`, not `/api/v1/...`. Actions use a colon: `POST /api/mail/messages:send`, `POST /api/admin/users/{id}:suspend`. |
+| Lists | Cursor pagination: `?limit=50&cursor=...` returns `{ "items": [...], "nextCursor": "..." }`. `nextCursor` is `null` on the last page. |
+| Errors | RFC 9457 `application/problem+json` with a stable `code` (see the `ErrorCode` schema in each spec) and, for validation errors, `fields`. |
+| Concurrency | Changeable resources return `ETag`. Send it back in `If-Match`. A stale value returns `412`; a missing one, where required, returns `428`. |
+| Retries | Mutating `POST`s accept an `Idempotency-Key` header. Mail requires it on `POST /api/mail/messages:send`. |
+
+A real error response looks like this:
+
+```text title="Output: GET /api/mail/labels without a token"
+HTTP/1.1 401 Unauthorized
+Content-Type: application/problem+json
+Www-Authenticate: Bearer realm="suitehive"
+X-Request-Id: eff0e21bbc6821882160cba6
+
+{"type":"about:blank","title":"Unauthorized","status":401,"detail":"missing, invalid or expired token","code":"common.unauthenticated","requestId":"eff0e21bbc6821882160cba6"}
+```
+
+## How to authenticate
+
+| Caller | How |
+|---|---|
+| Browser pages on the Auth origin | The session cookie plus an `X-CSRF` header whose value equals the CSRF cookie. Get the CSRF value from `GET /api/auth/csrf`. |
+| Mail, Calendar and admin web apps | `POST /api/auth/session/token` with `{"audience":["mail"]}` turns the session into a 10-minute access token. Send it as `Authorization: Bearer <token>`. |
+| Other services | A client-credentials token from `/oauth2/token` (for example `svc:mail`). |
+
+The token's audience must name the service you call. A token for `mail` is refused by Calendar. See [Auth tokens](/docs/developers/concepts/auth-tokens/) for the full flow.
+
+To try the Mail API by hand against your local stack, sign in and fetch a token the same way the web app does:
+
+```sh title="Bash"
+J=$(mktemp)
+CSRF=$(curl -s -c $J -b $J http://localhost:8081/api/auth/csrf | sed 's/.*"token":"\([^"]*\)".*/\1/')
+curl -s -c $J -b $J -H "Origin: http://localhost:8081" -H "X-CSRF: $CSRF" -H 'Content-Type: application/json' \
+  -d '{"email":"priya@suitehive.local","password":"suitehive-dev"}' http://localhost:8081/api/auth/login
+TOKEN=$(curl -s -c $J -b $J -H "Origin: http://localhost:8081" -H "X-CSRF: $CSRF" -H 'Content-Type: application/json' \
+  -d '{"audience":["mail"]}' http://localhost:8081/api/auth/session/token | sed 's/.*"accessToken":"\([^"]*\)".*/\1/')
+
+curl -s -H "Authorization: Bearer $TOKEN" 'http://localhost:8082/api/mail/threads?label=INBOX&limit=20'
+```
+
+<Aside type="note">
+This flow needs Auth started with `SH_DEV_INSECURE_COOKIES=true`, as in [Your first 15 minutes](/docs/developers/first-15-minutes/). For Calendar, ask for `{"audience":["calendar"]}` and call port 8083.
+</Aside>
+
+## Next steps
+
+- [Add a REST endpoint](/docs/developers/recipes/rest-endpoint/)
+- [Auth tokens](/docs/developers/concepts/auth-tokens/)
+- [Architecture: contracts](/docs/architecture/contracts/)

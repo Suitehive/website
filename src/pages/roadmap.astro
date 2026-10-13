@@ -1,0 +1,71 @@
+---
+import Base from '../layouts/Base.astro';
+
+const v1 = [
+  { title: 'Auth and Admin', body: 'Organizations, domains, users, groups, roles, passkeys and 2-step verification, OpenID Connect, the audit log and first-run setup.' },
+  { title: 'Mail', body: 'Web app, SMTP in and out, IMAP, threads, labels, search, filters, and DKIM, SPF and DMARC.' },
+  { title: 'Calendar', body: 'Web app, recurrence, invitations, free/busy, rooms, reminders and CalDAV.' },
+  { title: 'Install and operations', body: 'One-command install, backups and upgrades.' },
+  { title: 'First release', body: 'Container images published under ghcr.io/suitehive, and a tested install on a real server.' },
+];
+const next = [
+  { tone: 'mint', title: 'Contacts', body: 'Shared and personal address books, with CardDAV sync.' },
+  { tone: 'sky', title: 'Drive', body: 'Files and sharing.' },
+  { tone: 'peach', title: 'Docs, Sheets and Slides', body: 'Documents with real-time collaboration.' },
+  { tone: 'lavender', title: 'Chat', body: 'Team messaging.' },
+  { tone: 'butter', title: 'Import from Google Workspace', body: 'Bring your mail, calendars and accounts across.' },
+];
+---
+<Base title="Roadmap" description="What Suitehive is building now (Mail, Calendar, Auth and Admin for v1) and what comes next (Contacts, Drive, Docs, Chat).">
+  <section class="page-hero">
+    <div class="glow" aria-hidden="true"></div>
+    <div class="wrap">
+      <p class="eyebrow reveal">Roadmap</p>
+      <h1 class="display reveal">Mail and Calendar first.</h1>
+      <p class="lead reveal">Suitehive is built in the open, one app at a time. Version 1 covers sign-in, Mail and Calendar. After that, the rest of the suite.</p>
+    </div>
+  </section>
+
+  <section class="wrap now">
+    <div class="head reveal">
+      <h2 class="h2">v1 <span class="tag">In progress</span></h2>
+      <p class="muted">All three services run together end to end with demo data. They aren’t ready for production mail yet.</p>
+    </div>
+    <ol class="list">
+      {v1.map((i) => (
+        <li class="reveal"><h3 class="h3">{i.title}</h3><p>{i.body}</p></li>
+      ))}
+    </ol>
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <div class="head reveal">
+        <h2 class="h2">Next</h2>
+        <p class="muted">Each app is its own service with its own database, so new apps can be added without touching the rest.</p>
+      </div>
+      <div class="grid">
+        {next.map((i) => (
+          <article class={`card lift tone-${i.tone} reveal`}><h3 class="h3">{i.title}</h3><p>{i.body}</p></article>
+        ))}
+      </div>
+      <p class="foot reveal">Follow along in the <a href="/docs/changelog/">changelog</a> and the <a href="/docs/roadmap/">detailed roadmap</a> in the docs, or <a href="https://github.com/Suitehive">on GitHub</a>.</p>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .head { max-width: 44rem; margin-bottom: 28px; }
+  .head .muted { margin: 14px 0 0; font-size: 1.06rem; }
+  .tag { font-family: var(--body); font-size: 0.85rem; font-weight: 600; letter-spacing: 0; vertical-align: middle; padding: 5px 12px; border-radius: 999px; background: var(--sun); color: #222b36; margin-left: 8px; }
+  .list { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--line); counter-reset: v; }
+  .list li { display: grid; grid-template-columns: 56px minmax(0, 260px) minmax(0, 1fr); gap: 16px; padding: 24px 0; border-bottom: 1px solid var(--line); align-items: baseline; counter-increment: v; }
+  .list li::before { content: counter(v, decimal-leading-zero); font-family: var(--mono); color: var(--subtle); font-size: 0.9rem; }
+  .list p { margin: 0; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  .grid p { margin: 10px 0 0; color: var(--muted); }
+  :global(:root[data-theme='dark']) .grid p { color: var(--ink); opacity: 0.82; }
+  .foot { margin-top: 40px; color: var(--muted); }
+  .foot a { color: var(--accent); }
+  @media (max-width: 720px) { .list li { grid-template-columns: 40px 1fr; } .list li p { grid-column: 2; } }
+</style>

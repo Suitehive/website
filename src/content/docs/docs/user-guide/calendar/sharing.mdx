@@ -1,0 +1,71 @@
+---
+title: Sharing calendars
+description: Share a calendar with people, groups or your whole organization, and choose how much they can see and do.
+sidebar:
+  order: 6
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** the four sharing levels, how to share a calendar, and how private events and the private iCal address work.
+
+## Sharing levels
+
+| Level | They can |
+|---|---|
+| See only free/busy | See when you're busy, but not titles or details |
+| See all details | See every event and its details |
+| Make changes | Add, change and delete events |
+| Make changes and manage sharing | All of the above, and change who the calendar is shared with |
+
+Each level includes everything above it. Free/busy-only access never shows event titles in any view,
+in event details or in search.
+
+## Share a calendar
+
+<Steps>
+
+1. Right-click the calendar in the sidebar and choose **Settings and sharing**, or open
+   **Settings → My calendars** and pick the calendar.
+
+2. Under **Share with specific people**, type names or email addresses in **Add people**.
+
+3. Choose a level in **Permission** and add them.
+
+4. To share with everyone in your organization, set the level on the **Everyone in** row. **Make changes and
+   manage sharing** isn't offered for the whole organization.
+
+</Steps>
+
+To change someone's level, pick a new one next to their name. To stop sharing, select the X next to their name.
+You need **Make changes and manage sharing**, or to own the calendar, to see these settings.
+
+Calendars shared with you appear under **Other calendars** in the sidebar. A lock icon means you can only read it.
+
+## Private events
+
+In the editor, set **Visibility** to **Private** for one event. People who can see the calendar's details see
+that event only as busy. Only you see the details.
+
+## Private address in iCal format
+
+The owner of a calendar can get a secret address that any calendar app can subscribe to, read-only.
+
+<Steps>
+
+1. In the calendar's settings, under **Private address in iCal format**, select **Get address**.
+
+2. Copy the address into the other app.
+
+</Steps>
+
+<Aside type="caution" title="Keep it secret">
+Anyone with this address can see all event details. If it leaks, select **Reset link**. The old address stops
+working and apps using it stop updating. The address is only shown right after you get or reset it.
+</Aside>
+
+For two-way sync on your own devices, use CalDAV instead. See [Connecting apps](/docs/user-guide/connecting-apps/).
+
+## Next steps
+
+- [Import and export](/docs/user-guide/calendar/import-export/)
+- [Connecting apps](/docs/user-guide/connecting-apps/)

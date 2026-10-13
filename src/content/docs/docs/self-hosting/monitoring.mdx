@@ -1,0 +1,95 @@
+---
+title: Monitoring
+description: Health and readiness endpoints, Docker healthchecks, tracing, and what Suitehive does not expose yet.
+sidebar:
+  order: 9
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how to tell whether each service is up and ready, and how to hook Suitehive into your own monitoring.
+
+## Quick check
+
+```sh
+suitehive status
+```
+
+It lists every container with its Docker health state, and checks Auth's `/healthz` directly (showing its version). In the admin console, the services health page shows the same readiness from Auth's point of view; see [Services health](/docs/admin/services-health/).
+
+## Health endpoints
+
+Auth, Mail and Calendar each answer two endpoints on their HTTP port:
+
+| Endpoint | Meaning | Response |
+|---|---|---|
+| `GET /healthz` | The process is alive | Always `200` with `{"status":"ok","service":"...","version":"..."}` |
+| `GET /readyz` | Ready for traffic: every dependency check passes and the service isn't shutting down | `200` with `{"status":"ok","checks":{...}}`, or `503` with `"status":"unavailable"` and the failing check marked `fail` |
+
+Each readiness check has a 2-second limit. The checks are:
+
+| Service | Port | Readiness checks |
+|---|---|---|
+| Auth | 8081 | `postgres`, `nats` |
+| Mail | 8082 | `postgres`, `nats`, `jwks` (Auth's signing keys loaded) |
+| Calendar | 8083 | `postgres`, `nats`, `realtime`, `jwks` |
+
+```json title="GET /readyz (Mail, NATS down)"
+{"status":"unavailable","checks":{"jwks":"ok","nats":"fail","postgres":"ok"}}
+```
+
+Failing checks are also logged as `readiness check failed` with the check name.
+
+### Reaching the endpoints
+
+Only Auth's port is published on the host, and only on `127.0.0.1` (`SH_AUTH_LOCAL_PORT`, default 8081):
+
+```sh
+curl -s http://127.0.0.1:8081/readyz
+```
+
+For Mail and Calendar, run the request inside the container (the images ship a small `wget` for this):
+
+```sh
+cd /opt/suitehive
+docker compose exec mail wget -qO- http://127.0.0.1:8082/readyz
+docker compose exec calendar wget -qO- http://127.0.0.1:8083/readyz
+```
+
+On the public hostname, `/healthz` and `/readyz` are answered by Auth, because Caddy sends paths it doesn't route elsewhere to Auth.
+
+## Docker healthchecks
+
+`docker-compose.yml` defines a healthcheck for every service except Caddy:
+
+| Service | Check | Timing |
+|---|---|---|
+| `auth`, `mail`, `calendar` | `wget` of `/healthz` | Every 10 s, 6 retries, 60 s start period |
+| `postgres` | `pg_isready` | Every 5 s, 30 retries |
+| `nats` | `wget` of its monitoring `/healthz` on port 8222 (internal only) | Every 5 s, 30 retries |
+
+Mail and Calendar wait for Auth to be healthy before they start. All containers restart automatically (`restart: unless-stopped`).
+
+## External uptime checks
+
+A simple external probe: request `https://<your hostname>/login` and expect `200`. For mail, check that ports 25, 465, 587 and 993 accept TCP connections and present a valid certificate.
+
+## Tracing
+
+The services can export OpenTelemetry traces over OTLP/HTTP. Tracing is off until you set an endpoint: `SH_OTEL_ENDPOINT` for Auth and Calendar, `SH_TRACE_ENDPOINT` for Mail (both `host:port`, sample ratio `0.1` by default). This needs a `docker-compose.yml` edit; see [Configuration](/docs/self-hosting/configuration/).
+
+## Not available yet
+
+<Aside type="note" title="No metrics endpoint">
+The services don't expose a Prometheus `/metrics` endpoint today. Use container metrics (`docker stats`, cAdvisor or your host monitoring) for CPU, memory and disk, and the readiness endpoints for service state.
+</Aside>
+
+Watch disk space closely: mail storage (the `mailblobs` volume) and PostgreSQL (`pgdata`) grow with your mail.
+
+```sh
+docker system df -v | grep suitehive
+```
+
+## Next steps
+
+- [Logs](/docs/self-hosting/logs/)
+- [Troubleshooting](/docs/self-hosting/troubleshooting/)

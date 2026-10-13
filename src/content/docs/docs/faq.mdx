@@ -1,0 +1,94 @@
+---
+title: FAQ
+description: Straight answers about Suitehive's status, license, cost, supported clients, hardware and migration.
+sidebar:
+  order: 1
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** honest answers to the questions people ask most before trying Suitehive.
+
+## Is Suitehive production-ready?
+
+No. Suitehive is in early development. Mail, Calendar, Auth and the admin console run together end to end with demo data, but:
+
+- container images are not published yet, so the installer only works with `--build` (build from source) or `--dry-run`;
+- configuration, APIs and data can change in breaking ways until v1;
+- it hasn't been load-tested or installed on a real server end to end yet.
+
+Don't use it for your organization's real mail yet. Trying it locally and reporting problems helps a lot.
+
+## What license is it under?
+
+The license hasn't been chosen yet. Until a license is added, no license is granted to use, copy or distribute the code. A license will be added before the first release.
+
+## What does it cost?
+
+There are no per-seat fees. The only cost is the server you run it on (and your domain).
+
+## What's included today?
+
+Mail (web app, IMAP, SMTP), Calendar (web app, CalDAV, invitations) and one shared account with single sign-on, 2-step verification and an admin console. Contacts, Drive, Docs and Chat are planned; see the [Roadmap](/docs/roadmap/).
+
+## Which mail and calendar apps work with it?
+
+Suitehive uses open standards, so apps that speak them can connect:
+
+| What | Protocol | Port |
+|---|---|---|
+| Reading mail | IMAP over TLS | 993 |
+| Sending mail | SMTP submission | 465 (TLS) or 587 (STARTTLS) |
+| Calendars | CalDAV | 443 |
+
+Apps sign in with an **app password**, not your account password. See [Connecting apps](/docs/user-guide/connecting-apps/). Contacts sync (CardDAV) isn't available yet.
+
+Calendar invitations are standard iCalendar email, so they work with people on other mail systems.
+
+## What hardware do I need?
+
+Measured at idle with demo data, the whole stack uses about 400 MB of RAM and 0.7 GB of disk before any mail is stored.
+
+| Team size | CPU | RAM | Disk |
+|---|---|---|---|
+| Trial, up to 10 users | 1 vCPU | 2 GB | 10 GB SSD |
+| Up to 50 users | 2 vCPU | 4 GB | 40 GB SSD plus mail |
+| Around 500 users (estimate) | 4 vCPU | 8 GB | 100 GB or more |
+
+The installer expects about 4 GB of memory unless you pass `--skip-checks`. ClamAV antivirus adds 1 to 1.5 GB and rspamd about 300 MB. Mail fills the disk: plan for users times average mailbox size. See [Requirements](/docs/getting-started/requirements/).
+
+## Do I need my own domain and server?
+
+For real use, yes: a Linux server with a public IP address, Docker, and a domain where you can add DNS records. Ports 25, 80, 443, 465, 587 and 993 must be reachable, and outbound port 25 must be open (or use a [smarthost relay](/docs/self-hosting/smarthost/)). For a trial, you only need Docker on your laptop: see [Quick start](/docs/getting-started/quick-start/).
+
+## Can I run it on Windows or macOS?
+
+For a local trial, yes: macOS and Linux with `install.sh --local`, and Windows with Docker Desktop and `install.ps1`. Servers run Linux.
+
+## Can I migrate from Google Workspace?
+
+Not with a built-in tool yet. A Google Workspace import is on the roadmap. Today you can:
+
+- import calendars from `.ics` files (see [Import and export](/docs/user-guide/calendar/import-export/));
+- copy mail over IMAP with a third-party IMAP migration tool, since Suitehive Mail supports IMAP uploads.
+
+## Can my other apps use "Sign in with Suitehive"?
+
+Suitehive is an OpenID Connect provider, but registering your own applications isn't available yet. You can already let people sign in to Suitehive with Google or Microsoft; see [External sign-in](/docs/admin/external-sign-in/).
+
+## Does Suitehive read or scan my mail?
+
+There are no ads and no profiling. Mail checks incoming messages for SPF, DKIM and DMARC, and only scans for spam or viruses if you connect [rspamd or ClamAV](/docs/self-hosting/spam-and-antivirus/) on your own server. Remote images in messages are blocked until you allow them.
+
+## How do I back it up?
+
+`suitehive backup` writes one archive with the databases, stored mail and your configuration. See [Backups and restore](/docs/self-hosting/backups/).
+
+## How do I report a security problem?
+
+Report it privately to the maintainers instead of opening a public issue.
+
+## Next steps
+
+- [Quick start](/docs/getting-started/quick-start/)
+- [Roadmap](/docs/roadmap/)
+- [Changelog](/docs/changelog/)

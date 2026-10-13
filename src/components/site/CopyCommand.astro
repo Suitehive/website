@@ -1,0 +1,33 @@
+---
+interface Props { command: string; label?: string; prompt?: string; class?: string }
+const { command, label = 'Install command', prompt = '$', class: cls } = Astro.props;
+---
+<div class:list={['cmd', cls]}>
+  <span class="prompt" aria-hidden="true">{prompt}</span>
+  <code aria-label={label} tabindex="0">{command}</code>
+  <button type="button" data-copy={command} aria-label={`Copy: ${label}`}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+    <span class="copy-label">Copy</span>
+  </button>
+</div>
+
+<style>
+  .cmd {
+    display: flex; align-items: center; gap: 12px; max-width: 100%;
+    background: var(--code-bg); color: var(--code-fg); border-radius: 999px; padding: 6px 6px 6px 22px;
+    font-family: var(--mono); font-size: 0.9rem; box-shadow: var(--shadow-card);
+  }
+  .prompt { color: #f7de83; user-select: none; }
+  code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; scrollbar-width: none; padding: 8px 0; font-size: inherit; }
+  code::-webkit-scrollbar { display: none; }
+  code:focus-visible { outline: 2px solid #b5b3ff; outline-offset: 2px; }
+  button {
+    flex: none; display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: 999px;
+    border: 0; background: rgba(255, 255, 255, 0.1); color: inherit; font: 600 0.82rem var(--body); cursor: pointer;
+    transition: background 160ms var(--ease);
+  }
+  button:hover { background: rgba(255, 255, 255, 0.18); }
+  button:global(.copied) { background: #f7de83; color: #222b36; }
+  button svg { width: 15px; height: 15px; }
+  @media (max-width: 480px) { .copy-label { display: none; } button { padding: 0 11px; } .cmd { padding-left: 16px; font-size: 0.82rem; } }
+</style>

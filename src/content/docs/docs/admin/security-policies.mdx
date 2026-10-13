@@ -1,0 +1,80 @@
+---
+title: Security policies
+description: Require 2-step verification, set password length and session limits, and control app passwords for your organization.
+sidebar:
+  order: 6
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** what each organization security policy does, its default and allowed range, and how it is enforced.
+
+Open **Admin**, then **Access › Security policies** (`/admin/security`). Changing policies needs the `auth.org.manage` permission. Every change is recorded in the [audit log](/docs/admin/audit-log/) as `auth.org.policy.update`.
+
+## Policy reference
+
+| Setting | Options | Default | Notes |
+|---|---|---|---|
+| **Require 2-step** | Optional, Required for admins, Required for everyone | Required for admins | See [2-step verification](#2-step-verification) |
+| **Enforce from** | A date | none | Saved, but not applied yet (see below) |
+| **Minimum length** | 12 to 128 characters | 12 | Applies whenever a password is set |
+| **Allow app passwords** | On or off | On | See [App passwords](#app-passwords) |
+| **Session length** | 1, 7, 14, 30 or 90 days | 14 days | Maximum age of a sign-in |
+| **Idle timeout** | 1, 8 or 24 hours, or 7, 14 or 30 days | 3 days | Signs out after this much inactivity. Can't exceed the session length. |
+| **Sign in with** Google, Microsoft | On or off | Off | See [External sign-in](/docs/admin/external-sign-in/) |
+| **Keep deleted accounts for** | 7, 14, 30, 60 or 90 days in the console (the API allows 1 to 365) | 30 days | How long a deleted user's address and data are kept before they are purged. See [Users](/docs/admin/users/). |
+| **Mail to suspended people** | Keep receiving it, Bounce it | Keep receiving it | What Mail does with mail sent to a suspended user |
+
+<Aside type="caution" title="Minimum length below 12">
+The console's hint says 8 to 128 characters, but the server rejects values below 12. Use 12 or more.
+</Aside>
+
+## 2-step verification
+
+People enroll an authenticator app (TOTP) or a passkey, and get recovery codes. The policy decides who must have one:
+
+- **Optional:** nobody is forced. Anyone who has enrolled is still asked for their second step at sign-in.
+- **Required for admins:** applies to the organization owner and anyone with a built-in admin role (`owner`, `admin`, `user_admin`, `helpdesk`). Custom roles don't count.
+- **Required for everyone:** applies to every member.
+
+When a person who must use 2-step signs in without one, they get a limited session that only lets them set it up, at `/account/security/setup`. They can't open Mail, Calendar or Admin until they finish. People can't remove their last 2-step method while the policy requires one. Invitations enforce the same rule.
+
+The first admin created by `suitehive install` falls under the default policy, so you set up 2-step on your first sign-in.
+
+<Aside type="note" title="Not available yet: a grace period">
+**Enforce from** is stored, but sign-in doesn't read it yet: a requirement applies from each person's next sign-in after you save it. Tell people before you turn it on.
+</Aside>
+
+## Passwords
+
+Suitehive follows current NIST guidance: there are no composition rules (no forced symbols or digits). Besides the minimum length, every password:
+
+- has at most 256 characters;
+- isn't blank, a single repeated character, or contains control characters;
+- doesn't contain the person's email name, the organization name or a word of 4 or more letters from their name.
+
+After 10 failed sign-ins an account is locked for 15 minutes. This isn't configurable.
+
+<Aside type="note" title="Not available yet: breached-password check">
+Checking passwords against known breaches is designed but not connected yet.
+</Aside>
+
+## Sessions
+
+Session length and idle timeout are checked on every request against the current policy. Shortening the session length also ends existing sessions that are now too old.
+
+## App passwords
+
+Desktop and phone apps (IMAP, SMTP, CalDAV) sign in with app passwords that people create under **Account › App passwords** (up to 50 each). See [Connecting apps](/docs/user-guide/connecting-apps/).
+
+When you turn **Allow app passwords** off:
+
+- nobody can create new ones;
+- existing app passwords stop working at once (they aren't deleted, and work again if you turn the setting back on).
+
+Personal access tokens have no on/off policy.
+
+## Next steps
+
+- [External sign-in](/docs/admin/external-sign-in/)
+- [Users](/docs/admin/users/)
+- [Audit log](/docs/admin/audit-log/)

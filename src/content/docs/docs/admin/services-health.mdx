@@ -1,0 +1,49 @@
+---
+title: Services health
+description: Check whether Accounts, Mail and Calendar are healthy from the admin console, and what each status means.
+sidebar:
+  order: 9
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** where the admin console shows service health, what the statuses mean, and how the list of apps is defined.
+
+## Where to look
+
+- **Overview** (`/admin`): the **Services** section shows a tile per app with a status dot, its version and when it was last checked. A banner such as "Mail is down" appears at the top when an app is unhealthy.
+- **Access › Apps** (`/admin/apps`): one card per app with **Status**, **Version**, **Checked** and **Address**, and **Settings** and **Open** buttons.
+
+Viewing this needs the `auth.org.manage` permission.
+
+## Statuses
+
+Each time the page loads, Auth requests every app's `/readyz` endpoint (1.5-second limit) at its internal address:
+
+| Status | Meaning |
+|---|---|
+| **Healthy** | `/readyz` answered `200`: the app and its dependencies (database, NATS, signing keys) are ready |
+| **Degraded** | The app answered with another status, usually `503` because a dependency check failed |
+| **Down** | Auth couldn't connect to the app at all |
+| **Unknown** | The app has no `/readyz` endpoint, or hasn't been checked yet ("Not checked yet") |
+| **Turned off** | The app is disabled for this organization |
+
+The list always includes Auth itself, shown as **Accounts**.
+
+For the details of a failing check, read the app's `/readyz` response or its logs. See [Monitoring](/docs/self-hosting/monitoring/) and [Logs](/docs/self-hosting/logs/).
+
+## Which apps are listed
+
+The list comes from Auth's service registry. On an install made with `suitehive install` it contains Mail (`http://mail:8082`) and Calendar (`http://calendar:8083`), with their web apps under your public URL. Self-hosters with a different layout can set `SH_SERVICES` on Auth; see [Configuration](/docs/self-hosting/configuration/#auth).
+
+## App settings sections
+
+Each app can add its own section to the admin console (for example Mail's DKIM keys, delivery queue and outbound routing).
+
+<Aside type="note" title="Not available yet">
+Mail and Calendar don't ship their admin sections yet. Opening one shows "Mail has no admin settings." or a similar message. Until then, Mail's admin features exist only in its API; see [Smarthost relay](/docs/self-hosting/smarthost/) and [Domains](/docs/admin/domains/).
+</Aside>
+
+## Next steps
+
+- [Monitoring](/docs/self-hosting/monitoring/)
+- [Troubleshooting](/docs/self-hosting/troubleshooting/)

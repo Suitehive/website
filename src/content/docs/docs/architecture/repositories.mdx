@@ -1,0 +1,43 @@
+---
+title: Repositories
+description: How the Suitehive code is split into repositories, the dependency rule between them, and how they are versioned.
+sidebar:
+  order: 2
+---
+
+**What you'll learn:** why Suitehive uses many small repositories, and the one rule that keeps them independent.
+
+## The split
+
+| Repository | Contents |
+|---|---|
+| `architecture` | Design documents (high-level design, one detailed design per service, UI design system) |
+| `contracts` | The agreed shapes of REST APIs (OpenAPI), service-to-service calls and events (protobuf), plus generated Go and TypeScript code |
+| `kit` | A shared Go library for mechanisms every service needs: database transactions, outbox and inbox, token checks, logging. No business rules. |
+| `ui` | Design tokens, React components and the shared app shell |
+| `auth`, `mail`, `calendar` | One service each, with its web app, database migrations and tests |
+| `deploy` | Local development infrastructure; a Helm chart is planned |
+| `suitehive` | The installer, the `suitehive` CLI and the production compose and Caddy templates |
+| `website` | This website |
+
+All of them live under [github.com/Suitehive](https://github.com/Suitehive) and are private while the project is in early development.
+
+## The dependency rule
+
+A service imports only `kit` and `contracts`, never another service's code. Services reach each other only through:
+
+- **RPC calls** defined in `contracts/proto`, for questions that need an answer right away (for example "is this app password valid?").
+- **Events** defined in `contracts/proto/suitehive/events`, for everything else (for example "a user was created").
+
+The dependency between services points one way: Calendar uses Mail, and both use Auth. When Auth needs to send email (invitations, password resets), it uses plain SMTP through a configurable relay, not Mail's API, so Auth can be installed alone.
+
+## Versioning
+
+- During development, a root `go.work` file and an npm workspace link the repositories, so a change in `kit` is used by every service at once.
+- The plan is semantic versioning for `contracts` and `kit`, with services pinning the versions they use.
+- Contract changes must stay backward compatible: add fields, never rename or remove them. A breaking change gets a new version (for example `auth.v2`), and the old one stays supported for a while.
+
+## Next steps
+
+- [Contracts](/docs/architecture/contracts/)
+- [Repository map (for developers)](/docs/developers/repo-map/)

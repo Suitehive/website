@@ -1,0 +1,127 @@
+---
+title: Your account
+description: Manage your profile, password, 2-step verification, signed-in devices, app passwords and appearance.
+sidebar:
+  order: 3
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** what each section of your account does, how to set up 2-step verification, and how to
+sign out a lost device.
+
+Open your account from the account menu (your picture or initials at the top right) or go to
+`https://suite.example.com/account`. One account covers Mail, Calendar and every other Suitehive app.
+
+| Section | What's there |
+|---|---|
+| Profile | Name, language, time zone, date format, time format, photo |
+| Security | Password, authenticator app, recovery codes, passkeys |
+| Devices | Where you're signed in |
+| App passwords | Passwords for mail and calendar apps |
+| Connected apps | Other apps you allowed to use your account |
+| Appearance | Theme, density, reading font |
+
+## Profile
+
+Change your **Name**, **Language** and **Time zone**. **Date format** and **Time format** follow your
+language by default; you can pick a fixed style such as `2026-03-14` or `15:30` instead. Calendar uses your
+time zone from here.
+
+<Aside type="note" title="Profile photos">
+The photo upload is in the page, but the server doesn't accept photos yet.
+</Aside>
+
+## Password
+
+In **Security**, select **Change password**. Enter your current password and a new one of at least 12
+characters (your organization may require more). A meter shows how strong it is. Passwords found in known
+data breaches are refused.
+
+Changing your password keeps you signed in on this device and signs you out everywhere else.
+
+## 2-step verification
+
+2-step verification asks for a second proof after your password. Your organization may require it.
+You can use either method, or both.
+
+### Authenticator app
+
+<Steps>
+
+1. In **Security**, select **Set up** next to **Authenticator app**.
+
+2. Scan the QR code with an app such as Aegis, 1Password or Google Authenticator, or type the key shown below it.
+
+3. Enter the 6-digit code from the app.
+
+</Steps>
+
+### Passkeys
+
+A passkey lets you sign in with your fingerprint, face or device screen lock. Under **Passkeys**, select **Add a passkey** and
+follow your browser's prompt. Give each passkey a name you'll recognize; you can **Rename** or **Remove** it later.
+When you sign in, the passkey prompt starts on its own if you have one.
+
+### Recovery codes
+
+When you turn on your first method, you get a set of recovery codes. Each one works once, if you lose your
+phone or passkey. **Download** or **Copy** them and confirm **I saved my recovery codes**.
+
+**Security** shows how many codes you have left. Select **Get new codes** for a fresh set; the old ones stop working.
+
+<Aside type="caution" title="Sensitive changes ask again">
+Changing your password or 2-step methods, or creating an app password, may ask you to confirm with a passkey or
+code first, even though you're signed in. After you confirm, the change goes through.
+</Aside>
+
+## Devices
+
+**Devices** lists every active session: browser and device, approximate location, IP address and when it was
+last active. Your current one is marked **This device**.
+
+- Select **Sign out** next to a session to end it.
+- Select **Sign out all others** to end every session except this one.
+
+If you lose a laptop or phone, sign it out here and change your password.
+
+## App passwords
+
+Mail apps and calendar apps (Thunderbird, Apple Mail, phone apps) don't sign in with your account password.
+Each one gets its own app password.
+
+<Steps>
+
+1. Go to **App passwords** and select **Create app password**.
+
+2. Give it a **Name** you'll recognize, such as "Thunderbird on laptop".
+
+3. Under **Works with**, choose **Mail apps** (IMAP and SMTP), **Calendar apps** (CalDAV), or both.
+
+4. Select **Create**. Copy the password now: it's shown once and can't be shown again.
+
+</Steps>
+
+The list shows when each password was created and last used. Select **Revoke** to turn one off; apps using it
+stop syncing until you give them a new one. If your organization turned app passwords off, the page says so.
+
+For server settings, see [Connecting apps](/docs/user-guide/connecting-apps/).
+
+## Connected apps
+
+Other tools that use "Sign in with Suitehive" appear here after you allow them. Select **Revoke access…** to
+remove one.
+
+## Appearance
+
+| Setting | Options |
+|---|---|
+| Theme | System, Light, Dark |
+| Density | Comfortable, Compact (fits more rows in lists and tables) |
+| Reading font | Sans or Serif, for email bodies |
+
+Theme and density are also in the account menu.
+
+## Next steps
+
+- [Connecting apps](/docs/user-guide/connecting-apps/)
+- [First sign-in](/docs/getting-started/first-sign-in/)

@@ -1,0 +1,74 @@
+---
+title: Contributing
+description: How to pick up work on Suitehive, what to check before you open a pull request, and what "done" means for a change.
+sidebar:
+  order: 8
+---
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+**What you'll learn:** how to start a change, which checks to run before a pull request, and the definition of done reviewers use.
+
+Suitehive is in early development, which makes this a good time to shape it. Expect breaking changes to configuration, APIs and data until v1.
+
+## Before you start
+
+- **Read the design first.** The [architecture](https://github.com/Suitehive/architecture) repository explains how the pieces fit and why. Start with `docs/design/00-engineering-principles.md` and `01-hld.md`, then the document for the part you touch.
+- **Pick a repository.** Each one has a `README.md`, a `RUN.md` and an `ARCHITECTURE.md` with the status of every module. Issues labelled `good first issue` are a good start.
+- **Discuss bigger changes first.** Open an issue before a large pull request, so you can agree on the approach.
+- **Report security problems privately** to the maintainers instead of opening a public issue.
+
+## Make the change
+
+<Steps>
+
+1. Set up the workspace with [Your first 15 minutes](/docs/developers/first-15-minutes/).
+2. Create a branch in the repository you change. A change that touches the API usually spans two repositories: `contracts` and the service.
+3. Write the test first when you can. The edge-case lists in the design documents are the test plan.
+4. Keep one change per pull request, and update the OpenAPI spec in the same change as the handler.
+5. Run the checks below, then open the pull request.
+
+</Steps>
+
+## Checks to run
+
+The CI of the service repositories runs these checks (shown for Mail; run them in the repository you changed):
+
+```sh
+gofmt -l .                                   # must print nothing
+go vet ./...
+go test -race -count=1 ./...                 # needs the dev Postgres and NATS
+npm run typecheck -w mail/web                # or auth/web, calendar/web
+npm run build -w mail/web
+```
+
+For the `contracts` repository, also run `./gen.sh` (proto lint, format check and code generation) and `npm run check -w @suitehive/contracts` (regenerates the TypeScript types and type checks them).
+
+## Definition of done
+
+From `docs/design/00-engineering-principles.md`, section 12:
+
+- Domain rules and state changes are unit tested, including the illegal paths.
+- The use case checks permissions, validates input, runs in a transaction and emits events through the outbox.
+- Adapters pass their contract tests; Postgres queries have integration tests.
+- Every new read path has a test that one organization cannot see another's data.
+- The OpenAPI spec is updated and error codes are documented.
+- Logs contain no sensitive data.
+- Migrations are forward-only and safe on a live database (no long locks).
+
+## Contract changes
+
+Contracts are shared by every service, so changes must be backward compatible: add fields and endpoints, never rename or remove them. A breaking change needs a new version (for example `auth.v2`), and the old one stays supported for a while.
+
+<Aside type="note">
+`./gen.sh breaking` (the automatic breaking-change check) needs Git history, and has not run in CI yet. Reviewers check compatibility by hand until it does.
+</Aside>
+
+## License
+
+The license has not been chosen yet. A license will be added before the first release.
+
+## Next steps
+
+- [Coding principles](/docs/developers/coding-principles/)
+- [Testing](/docs/developers/testing/)
+- [Repository map](/docs/developers/repo-map/)

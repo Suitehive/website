@@ -1,0 +1,107 @@
+---
+import '@fontsource-variable/outfit';
+import '@fontsource-variable/geist';
+import '@fontsource-variable/geist-mono';
+import '../styles/marketing.css';
+import Nav from '../components/site/Nav.astro';
+import Footer from '../components/site/Footer.astro';
+
+interface Props {
+  title: string;
+  description: string;
+  /** Use the bare title (home page). */
+  bareTitle?: boolean;
+}
+const { title, description, bareTitle = false } = Astro.props;
+const fullTitle = bareTitle ? title : `${title} · Suitehive`;
+const canonical = new URL(Astro.url.pathname, Astro.site);
+const ogImage = new URL('/og.png', Astro.site);
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <meta name="theme-color" content="#fbfaf6" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0e1014" media="(prefers-color-scheme: dark)" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Suitehive" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="640" />
+    <meta property="og:image:alt" content="Suitehive: your workspace, on your own server." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={fullTitle} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
+    <script is:inline>
+      // Shares the theme choice with the docs (Starlight stores it under the same key).
+      (function () {
+        var d = document.documentElement;
+        d.classList.add('js');
+        var t = null;
+        try { t = localStorage.getItem('starlight-theme'); } catch (e) {}
+        if (t === 'light' || t === 'dark') d.setAttribute('data-theme', t);
+      })();
+    </script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <Nav />
+    <main id="main">
+      <slot />
+    </main>
+    <Footer />
+    <script>
+      const els = document.querySelectorAll<HTMLElement>('.reveal');
+      if ('IntersectionObserver' in window) {
+        const io = new IntersectionObserver(
+          (entries) => {
+            for (const e of entries) {
+              if (e.isIntersecting) {
+                e.target.classList.add('in');
+                io.unobserve(e.target);
+              }
+            }
+          },
+          { rootMargin: '0px 0px -8% 0px', threshold: 0.05 },
+        );
+        els.forEach((el) => io.observe(el));
+      } else {
+        els.forEach((el) => el.classList.add('in'));
+      }
+
+      // Copy buttons
+      document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const text = btn.dataset.copy ?? '';
+          try {
+            await navigator.clipboard.writeText(text);
+          } catch {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
+          }
+          const label = btn.querySelector('.copy-label');
+          btn.classList.add('copied');
+          if (label) label.textContent = 'Copied';
+          setTimeout(() => {
+            btn.classList.remove('copied');
+            if (label) label.textContent = 'Copy';
+          }, 1600);
+        });
+      });
+    </script>
+  </body>
+</html>

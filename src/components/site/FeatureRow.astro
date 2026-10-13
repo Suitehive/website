@@ -1,0 +1,29 @@
+---
+interface Props { tone: string; label: string; title: string; href: string; points: string[]; flip?: boolean }
+const { tone, label, title, href, points, flip = false } = Astro.props;
+---
+<article class:list={['row', { flip }]}>
+  <div class="text reveal">
+    <p class={`pill tone-${tone}`}>{label}</p>
+    <h3 class="h3 big">{title}</h3>
+    <ul class="ticks">
+      {points.map((p) => <li set:html={p} />)}
+    </ul>
+    <a class="more" href={href}>More about {label} <span aria-hidden="true">→</span></a>
+  </div>
+  <div class="media reveal"><slot /></div>
+</article>
+
+<style>
+  .row { display: grid; grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr); gap: clamp(32px, 5vw, 72px); align-items: center; padding: clamp(40px, 6vw, 72px) 0; }
+  .row.flip { grid-template-columns: minmax(0, 1.18fr) minmax(0, 0.82fr); }
+  .row.flip .text { order: 2; }
+  .pill { display: inline-block; margin: 0 0 18px; padding: 5px 12px; border-radius: 999px; font-size: 0.84rem; font-weight: 600; }
+  .tone-sky { color: var(--s-sky); } .tone-butter { color: var(--s-butter); } .tone-lavender { color: var(--s-lavender); } .tone-mint { color: var(--s-mint); }
+  .big { font-size: clamp(1.7rem, 2.8vw, 2.3rem); letter-spacing: -0.04em; line-height: 1.06; margin-bottom: 24px; }
+  .ticks { margin-bottom: 26px; }
+  @media (max-width: 900px) {
+    .row, .row.flip { grid-template-columns: 1fr; }
+    .row.flip .text { order: 0; }
+  }
+</style>

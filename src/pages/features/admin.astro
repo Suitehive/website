@@ -1,0 +1,39 @@
+---
+import FeaturePage from '../../components/site/FeaturePage.astro';
+import overview from '../../assets/screenshots/admin-overview.png';
+import users from '../../assets/screenshots/admin-users.png';
+import usersDark from '../../assets/screenshots/admin-users-dark.png';
+---
+<FeaturePage
+  pageTitle="Admin and SSO"
+  description="Suitehive Admin and single sign-on: one account for every app, passkeys and 2-step verification, and one console for users, groups, domains, roles and the audit log."
+  label="Admin and SSO"
+  tone="lavender"
+  title="One account for every app."
+  lead="People sign in once for Mail, Calendar and Admin. You manage users, groups, domains and security from one console, with changes recorded in the audit log."
+  shots={[
+    { light: overview, url: 'suite.example.com/admin', alt: 'Admin overview with a setup checklist and the health of the Accounts, Mail and Calendar services', caption: 'The overview: a setup checklist and the health of each service.' },
+    { light: users, dark: usersDark, url: 'suite.example.com/admin/users', alt: 'Admin users table listing three people with status, roles and 2-step verification', caption: 'Users, with filters for status, role, domain and 2-step.' },
+  ]}
+  caps={[
+    { title: 'Single sign-on', body: 'One account for every Suitehive app. Sign in with a password plus a passkey or an authenticator app.' },
+    { title: 'Users and groups', body: 'Invite, suspend and delete people, and organize them into groups.' },
+    { title: 'Domains and DNS', body: 'Add your domains and follow a checklist that shows each record to create (MX, SPF, DKIM, DMARC, autodiscovery) and checks it live.' },
+    { title: 'Roles', body: 'Built-in roles such as owner, admin, user admin and helpdesk, so people get only the access they need.' },
+    { title: 'Security policies', body: 'Require 2-step verification, set password rules and session length, and turn app passwords on or off.' },
+    { title: 'Audit log', body: 'A record of sign-ins and admin changes: who did what, and when.' },
+    { title: 'OpenID Connect provider', body: 'Suitehive issues standard OpenID Connect tokens. Registering your own apps for “Sign in with Suitehive” is planned.' },
+    { title: 'Sign in with Google or Microsoft', body: 'Optionally let people sign in through an external identity provider.' },
+    { title: 'Service health', body: 'See at a glance whether Accounts, Mail and Calendar are healthy.' },
+  ]}
+  standards={[
+    { name: 'OpenID Connect', detail: 'Standard discovery, tokens and published signing keys. Mail and Calendar sign in through it.' },
+    { name: 'WebAuthn', detail: 'Passkeys and security keys for phishing-resistant 2-step verification.' },
+    { name: 'TOTP', detail: 'Any authenticator app, plus one-time recovery codes.' },
+  ]}
+  docs={[
+    { href: '/docs/admin/overview/', label: 'Admin guide' },
+    { href: '/docs/admin/security-policies/', label: 'Security policies' },
+    { href: '/docs/user-guide/account/', label: 'Account and 2-step verification' },
+  ]}
+/>

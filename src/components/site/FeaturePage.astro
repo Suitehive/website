@@ -1,0 +1,119 @@
+---
+import Base from '../../layouts/Base.astro';
+import Shot from './Shot.astro';
+import type { ImageMetadata } from 'astro';
+
+interface Cap { title: string; body: string }
+interface ShotDef { light: ImageMetadata; dark?: ImageMetadata; url: string; alt: string; caption?: string }
+interface Props {
+  pageTitle: string;
+  description: string;
+  label: string;
+  tone: string;
+  title: string;
+  lead: string;
+  shots: ShotDef[];
+  caps: Cap[];
+  standards?: { name: string; detail: string }[];
+  docs: { href: string; label: string }[];
+}
+const { pageTitle, description, label, tone, title, lead, shots, caps, standards, docs } = Astro.props;
+---
+<Base title={pageTitle} description={description}>
+  <section class="page-hero">
+    <div class="glow" aria-hidden="true"></div>
+    <div class="wrap">
+      <p class={`pill tone-${tone} reveal`}>{label}</p>
+      <h1 class="display reveal">{title}</h1>
+      <p class="lead reveal">{lead}</p>
+      <div class="actions reveal">
+        <a class="btn btn-primary" href={docs[0].href}>{docs[0].label}</a>
+        <a class="btn btn-ghost" href="/docs/getting-started/quick-start/">Try it locally</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap shots">
+    {shots.map((s, i) => (
+      <figure class="reveal">
+        <Shot light={s.light} dark={s.dark} url={s.url} alt={s.alt} eager={i === 0} />
+        {s.caption && <figcaption>{s.caption}</figcaption>}
+      </figure>
+    ))}
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <p class="eyebrow">Key capabilities</p>
+        <h2 class="h2">What it does</h2>
+      </div>
+      <div class="caps">
+        {caps.map((c) => (
+          <article class="cap reveal">
+            <h3 class="h3">{c.title}</h3>
+            <p set:html={c.body} />
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  {standards && (
+    <section class="section std-section">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <p class="eyebrow">Standards</p>
+          <h2 class="h2">Works with the apps you already have.</h2>
+        </div>
+        <div class="std">
+          {standards.map((s) => (
+            <div class={`card tone-${tone} reveal`}>
+              <p class="std-name">{s.name}</p>
+              <p class="std-detail" set:html={s.detail} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  )}
+
+  <section class="section docs-links">
+    <div class="wrap">
+      <div class="note reveal">
+        <p><strong>Early development.</strong> Screens are from the current development build with demo data. Some details are still being built; the <a href="/docs/changelog/">changelog</a> lists what works today.</p>
+      </div>
+      <h2 class="h3 reveal">Read more in the docs</h2>
+      <ul class="doc-list">
+        {docs.map((d) => (<li class="reveal"><a class="more" href={d.href}>{d.label} <span aria-hidden="true">→</span></a></li>))}
+      </ul>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .pill { display: inline-block; margin: 0 0 22px; padding: 6px 14px; border-radius: 999px; font-size: 0.88rem; font-weight: 600; }
+  .tone-sky.pill { color: var(--s-sky); } .tone-butter.pill { color: var(--s-butter); } .tone-lavender.pill { color: var(--s-lavender); }
+  .display { max-width: 15ch; }
+  .actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 32px; }
+  .shots { display: grid; gap: 56px; }
+  .shots figure { margin: 0; }
+  .shots figcaption { margin-top: 14px; font-size: 0.88rem; color: var(--subtle); }
+  .caps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px 48px; }
+  .cap { border-top: 1px solid var(--line); padding-top: 22px; }
+  .cap p { color: var(--muted); margin: 10px 0 0; line-height: 1.55; }
+  .cap p :global(code) { font-size: 0.86em; background: var(--paper-2); padding: 1px 6px; border-radius: 6px; }
+  .std-section { padding-top: 0; }
+  .std { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .std .card { padding: 24px; }
+  .std-name { font-family: var(--display); font-weight: 700; font-size: 1.3rem; letter-spacing: -0.03em; margin: 0; }
+  .std-detail { margin: 6px 0 0; color: var(--muted); font-size: 0.94rem; }
+  :global(:root[data-theme='dark']) .std-detail { color: var(--ink); opacity: 0.8; }
+  .docs-links { padding-top: 0; }
+  .note { border-radius: 18px; background: var(--paper-2); border: 1px solid var(--line); padding: 18px 22px; margin-bottom: 48px; color: var(--muted); max-width: 52rem; }
+  .note p { margin: 0; }
+  .note a { color: var(--accent); }
+  .doc-list { list-style: none; margin: 18px 0 0; padding: 0; display: flex; gap: 12px 32px; flex-wrap: wrap; }
+  @media (max-width: 900px) { .caps { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 600px) { .caps { grid-template-columns: 1fr; gap: 28px; } .actions .btn { flex: 1 1 auto; justify-content: center; } }
+</style>

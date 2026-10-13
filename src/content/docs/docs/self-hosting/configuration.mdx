@@ -1,0 +1,167 @@
+---
+title: Configuration reference
+description: Every SH_* setting of an install and of the Auth, Mail and Calendar services, with defaults.
+sidebar:
+  order: 2
+---
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+**What you'll learn:** where Suitehive reads its settings, how to change one safely, and what every `SH_*` variable does.
+
+## How configuration works
+
+There are two layers:
+
+1. **`.env` in the install directory.** `suitehive install` writes it (mode 600) and generates every secret. Docker Compose reads it and substitutes the values into `docker-compose.yml` and the `Caddyfile`.
+2. **Service variables.** Each service reads `SH_*` environment variables once at startup. `docker-compose.yml` sets them per container from `.env`, so each container only sees what it needs.
+
+A service also reads an optional YAML file named by `SH_CONFIG_FILE`. Precedence is: environment variable, then the YAML file, then the built-in default. Invalid settings stop the service at startup with an error in its log.
+
+<Aside type="caution" title="Only some keys pass through">
+A key you add to `.env` reaches a service only if `docker-compose.yml` references it. The template passes through `SH_EMAIL_SMTP_URL`, `SH_EMAIL_FROM`, `SH_LOG_LEVEL`, `SH_DEV_*` and the values below. Anything else, such as `SH_RSPAMD_URL`, needs an edit to `docker-compose.yml`, and `suitehive upgrade` replaces that file (keeping your old one as `docker-compose.yml.bak`). Re-apply such edits after each upgrade.
+</Aside>
+
+### Change a setting
+
+<Steps>
+1. Edit `.env` in the install directory (`/opt/suitehive` by default).
+2. Apply it from the install directory:
+
+   ```sh
+   cd /opt/suitehive && docker compose up -d
+   ```
+
+   Running `suitehive install --yes` again also works: it keeps your secrets and any keys it doesn't manage.
+3. Check the result with `suitehive status`.
+</Steps>
+
+## Install settings (.env)
+
+| Key | Default | Description |
+|---|---|---|
+| `SH_VERSION` | `edge` | Image tag for `ghcr.io/suitehive/{auth,mail,calendar}`. `edge` follows `main`; pin a release for production. |
+| `SH_DOMAIN` | | Your first mail domain |
+| `SH_HOSTNAME` | `suite.<SH_DOMAIN>` | Public hostname for web, IMAP, SMTP and CalDAV. Needs an A/AAAA record. |
+| `SH_PUBLIC_URL` | `https://<SH_HOSTNAME>` | Base URL users and OIDC clients see. Also the OIDC issuer. |
+| `SH_SITE_ADDRESS` | `<SH_HOSTNAME>` | What Caddy serves: the hostname (automatic HTTPS) or `:80` (plain HTTP). See [TLS](/docs/self-hosting/tls/). |
+| `SH_TLS_EMAIL` | admin email | ACME account email for certificate expiry notices |
+| `SH_ORG_NAME`, `SH_ORG_SLUG`, `SH_ADMIN_EMAIL`, `SH_ADMIN_NAME` | | Informational: what first-time setup used. Changing them later has no effect. |
+| `SH_VERIFY_TXT_NAME`, `SH_VERIFY_TXT_VALUE` | | Domain-verification TXT record returned by setup; shown by `suitehive dns` |
+| `SH_EMAIL_SMTP_URL` | `smtp://mail:587` | How Auth sends its own email (invitations, password resets). Any SMTP relay works, for example `smtp://user:password@smtp.example.net:587`. |
+| `SH_EMAIL_FROM` | `Suitehive <no-reply@<SH_DOMAIN>>` | From address of that email |
+| `SH_LOCAL` | `false` | `true` for a local trial (`install --local`) |
+| `SH_BUILD` | `false` | `true` when images are built from source (`install --build`) |
+| `SH_HTTP_PORT`, `SH_HTTPS_PORT` | `80`, `443` | Host ports for Caddy (local trial: `8080`, `8443`) |
+| `SH_SMTP_PORT`, `SH_SMTPS_PORT`, `SH_SUBMISSION_PORT`, `SH_IMAPS_PORT` | `25`, `465`, `587`, `993` | Host ports for Mail (local trial: `2525`, `2465`, `2587`, `1993`) |
+| `SH_AUTH_LOCAL_PORT` | `8081` | Auth's HTTP port, published on `127.0.0.1` only, for the CLI |
+| `SH_DEV_SEED` | `false` | Seed the demo org and users. Never on a public server. |
+| `SH_DEV_INSECURE_COOKIES` | `false` | Plain cookies so sign-in works over `http://localhost`. Never on a public server. |
+| `SH_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
+| `SH_MASTER_KEY` | generated | 32 random bytes, base64. Encrypts secrets at rest. Losing it makes encrypted data unrecoverable. |
+| `SH_POSTGRES_PASSWORD` | generated | Letters and digits. Applied when the database volume is created. |
+| `SH_MAIL_CLIENT_SECRET`, `SH_CALENDAR_CLIENT_SECRET` | generated | Secrets of the `svc:mail` and `svc:calendar` service clients |
+
+<Aside type="danger" title="Never change the secrets on a running install">
+`SH_POSTGRES_PASSWORD` is set when the database volume is first created, and `SH_MASTER_KEY` encrypts data at rest. Changing either breaks the install. Back up `.env`: `suitehive backup` includes it.
+</Aside>
+
+The admin password is never stored in `.env`.
+
+## Settings shared by all services
+
+These come from the shared Go library and work the same in Auth, Mail and Calendar.
+
+| Variable | Default | Description |
+|---|---|---|
+| `SH_CONFIG_FILE` | | Optional YAML file with the same settings |
+| `SH_DB_URL` | `postgres://suitehive:suitehive@localhost:5432/suitehive_<service>?sslmode=disable` | The service's own database |
+| `SH_DB_MAX_CONNS`, `SH_DB_MIN_CONNS` | `20`, `0` | Connection pool size |
+| `SH_DB_MAX_CONN_LIFETIME`, `SH_DB_MAX_CONN_IDLE_TIME`, `SH_DB_HEALTH_CHECK_PERIOD` | `1h`, `10m`, `30s` | Pool connection recycling |
+| `SH_DB_ASSUME_ROLE` | Auth: `auth_app`; others: none | Role queries run as (`SET ROLE`) so row-level security applies |
+| `SH_DB_APPLICATION_NAME` | service name | Shown in `pg_stat_activity` |
+| `SH_NATS_URL` | `nats://localhost:4222` | NATS JetStream for events |
+| `SH_MASTER_KEY` | required (dev: fixed key) | Install-wide encryption key |
+| `SH_PUBLIC_URL` | per service | Browser-facing base URL |
+| `SH_HTTP_ADDR` | `:8081` / `:8082` / `:8083` | HTTP listen address (API, web app, `/healthz`, `/readyz`) |
+| `SH_ROLES` | Auth, Calendar: `api,worker`; Mail: `all` | Runtime roles this process runs |
+| `SH_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `SH_LOG_FORMAT` | `json` | `json` or `text` |
+| `SH_WEB_DIR` | | Serve the web app from this directory instead of the copy built into the image |
+| `SH_DEV_SEED` | `false` | Development only: seed demo data |
+| `SH_DEV_INSECURE_COOKIES` | `false` | Development only. Auth drops `Secure` and the `__Host-` cookie prefix; Mail and Calendar set no cookies and ignore it. |
+
+Tracing (OpenTelemetry over OTLP/HTTP) is off unless an endpoint is set. Auth and Calendar use `SH_OTEL_ENDPOINT`, `SH_OTEL_INSECURE` and `SH_OTEL_SAMPLE_RATIO` (default `0.1`); Mail uses the same names with the `SH_TRACE_` prefix.
+
+## Auth
+
+| Variable | Default | Description |
+|---|---|---|
+| `SH_PUBLIC_URL` | `http://localhost:5171` | Origin of the suite: OIDC issuer, base of invitation and reset links, passkey RP ID. Must be an origin with no path. |
+| `SH_ISSUER` | `SH_PUBLIC_URL` | OIDC issuer, if different |
+| `SH_BASE_URL` | `http://auth:8081` | Auth's own internal URL in the service registry |
+| `SH_SYSTEM_DB_URL` | `SH_DB_URL` | Optional separate login for cross-tenant system queries |
+| `SH_SKIP_MIGRATIONS` | `false` | Don't run database migrations at startup |
+| `SH_EMAIL_SMTP_URL` | empty: email is logged, not sent | `smtp://[user:password@]host[:port]` (STARTTLS) or `smtps://...`. `?tls=skip-verify` or `?tls=none` relax TLS; a single-label host such as `mail` defaults to `skip-verify`. |
+| `SH_EMAIL_FROM` | `Suitehive <no-reply@<public host>>` | From address of Auth's email |
+| `SH_MAIL_CLIENT_SECRET`, `SH_CALENDAR_CLIENT_SECRET` | required (dev: `dev-secret-<id>`) | Service client secrets. Other services: `SH_<ID>_CLIENT_SECRET`. |
+| `SH_SERVICES` | Mail and Calendar | Installed apps: `id\|Name\|baseURL\|webURL\|icon[\|adminModuleURL]`, separated by `;` |
+| `SH_RPC_SERVICE_TOKENS` | | Pre-shared RPC tokens (`mail=<token>,...`), a fallback for services not yet using client credentials |
+| `SH_DNS_SERVER` | system resolver | `host:port` of the DNS server used for domain verification |
+| `SH_AUDIT_RETENTION` | `9600h` (400 days) | How long audit entries are kept |
+| `SH_TRUSTED_PROXIES` | loopback and private ranges | Proxies whose `X-Forwarded-For` is trusted |
+| `SH_ALLOWED_ORIGINS` | the request's own host | CSRF `Origin` allow-list |
+| `SH_WEBAUTHN_RP_ID` | host of `SH_PUBLIC_URL` | Passkey relying-party ID. Passkeys don't work on an IP-address URL. |
+| `SH_WEB_DISABLED` | `false` | Don't serve the web app |
+| `SH_WEB_CSP` | built in | Override the `Content-Security-Policy` of the web app |
+| `SH_DEV_TRUST_DOMAINS` | `suitehive.local` with the dev seed | Development only: a list of domain names treated as verified without a DNS lookup |
+
+## Mail
+
+| Variable | Default | Description |
+|---|---|---|
+| `SH_PUBLIC_URL` | `http://localhost:8082` | Base URL for links in mail and the image proxy |
+| `SH_MAIL_HOSTNAME` | `localhost` | Server mail name: SMTP greeting, `Received:` headers, TLS certificate name |
+| `SH_MAIL_DOMAIN` | | First mail domain (informational; hosted domains come from Auth) |
+| `SH_DB_SYSTEM_URL` | main pool | Login that bypasses row-level security for cross-tenant work |
+| `SH_MIGRATE` | `true` | Apply migrations at startup |
+| `SH_AUTHN_ISSUER` | `http://localhost:8081` | Token issuer (the public URL in production) |
+| `SH_AUTHN_JWKS_URL` | `<issuer>/jwks` | Where signing keys are fetched |
+| `SH_AUTHN_AUDIENCE` | `mail` | Expected token audience |
+| `SH_AUTH_RPC_URL` | `SH_AUTHN_ISSUER` | Auth's RPC origin |
+| `SH_CLIENT_ID`, `SH_CLIENT_SECRET` | | Service client (`svc:mail`) and its secret |
+| `SH_TOKEN_URL` | `<auth rpc url>/oauth2/token` | Token endpoint for service calls |
+| `SH_BLOB_DIR` | `var/mail-blobs` | Message storage directory (image: `/var/lib/suitehive-mail/blobs`; installer: `/data/blobs`) |
+| `SH_TLS_CERT_DIR` | | Caddy's certificate storage. Empty or missing: a self-signed certificate. |
+| `SH_SMTP_ADDR` | `:2525` | Inbound SMTP (MX). Empty disables. |
+| `SH_SUBMISSION_ADDR`, `SH_SMTPS_ADDR` | | Submission with STARTTLS / implicit TLS. Empty disables. |
+| `SH_IMAPS_ADDR`, `SH_IMAP_ADDR` | | IMAPS / IMAP with STARTTLS. Empty disables. |
+| `SH_IMAP_INSECURE_AUTH`, `SH_SUBMISSION_INSECURE_AUTH` | `false` | Development only: allow passwords without TLS |
+| `SH_SMTP_MAX_SIZE` | `36700160` (35 MiB) | Maximum message size, inbound and submitted |
+| `SH_SMTP_TRUSTED_NETWORKS` | `127.0.0.0/8,::1/128` | Networks trusted by the MX and allowed to submit without login |
+| `SH_OUTBOUND_MODE` | `direct` (`local-only` with the dev seed) | `local-only`, `direct` or `smarthost`. See [Smarthost relay](/docs/self-hosting/smarthost/). |
+| `SH_RSPAMD_URL`, `SH_RSPAMD_PASSWORD`, `SH_RSPAMD_TIMEOUT` | off, none, `15s` | Optional rspamd. See [Spam and antivirus](/docs/self-hosting/spam-and-antivirus/). |
+| `SH_SPAM_THRESHOLD` | `0` | Score at or above which mail goes to Spam. `0` follows rspamd's own action. |
+| `SH_CLAMAV_ADDR`, `SH_CLAMAV_TIMEOUT` | off, `60s` | Optional ClamAV daemon |
+| `SH_MAILBOX_DEFAULT_QUOTA` | `16106127360` (15 GiB) | Quota for new mailboxes, in bytes |
+| `SH_SHUTDOWN_TIMEOUT` | `35s` | Drain time on shutdown |
+
+## Calendar
+
+| Variable | Default | Description |
+|---|---|---|
+| `SH_PUBLIC_URL` | `http://localhost:5173` | Base URL for links in invitations |
+| `SH_DB_AUTO_CREATE` | `true` | Create the database at startup if it's missing |
+| `SH_MIGRATE` | `true` | Apply migrations at startup |
+| `SH_AUTHN_ISSUER`, `SH_AUTHN_JWKS_URL`, `SH_AUTHN_AUDIENCE` | `http://localhost:8081`, `<issuer>/jwks`, `calendar` | Token verification |
+| `SH_AUTHN_REFRESH_INTERVAL`, `SH_AUTHN_MIN_REFRESH_INTERVAL` | `10m`, `10s` | Signing-key refresh |
+| `SH_AUTHN_LEEWAY`, `SH_AUTHN_MAX_TOKEN_BYTES` | `60s`, `8192` | Allowed clock skew; maximum token size |
+| `SH_CLIENT_ID`, `SH_CLIENT_SECRET`, `SH_TOKEN_URL` | `svc:calendar`, none, none | Service client for calls to Auth and Mail |
+| `SH_AUTH_RPC_URL`, `SH_MAIL_RPC_URL` | | Auth's and Mail's RPC origins (Mail sends invitations and reminders) |
+| `SH_CORS_ORIGINS` | `http://localhost:5173` | Origins allowed to call the API cross-origin |
+| `SH_SSE_MAX_STREAMS` | `10` | Live-update streams per user |
+
+## Next steps
+
+- [The suitehive CLI](/docs/self-hosting/cli/)
+- [TLS and certificates](/docs/self-hosting/tls/)
+- [Monitoring](/docs/self-hosting/monitoring/)

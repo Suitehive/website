@@ -1,0 +1,103 @@
+---
+title: Filters and settings
+description: Sort incoming mail with filters, forward mail, set a vacation responder and adjust Mail's general settings.
+sidebar:
+  order: 5
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how to create filters, forward mail to another address, turn on a vacation responder,
+and what each general setting does.
+
+Open settings from the command palette (`Ctrl+K`, then **Mail settings**) or go to `/mail/settings`.
+
+## Filters
+
+A filter checks each new message as it arrives and acts on the ones that match.
+
+<Steps>
+
+1. Go to **Settings → Filters** and create a filter. You can also open **Create filter** from the command
+   palette, or select **Create filter** in the advanced search form to start from a search.
+
+2. Under **When a message**, choose **Matches all** or **Matches any**, then fill in any of: **From**, **To**,
+   **Subject**, **Has the words**, **Doesn't have**, **Size** (larger or smaller than a number of MB) and
+   **Has attachment**.
+
+3. Select **Preview matches** to run the conditions as a search and see which messages they catch today.
+
+4. Under **Then**, pick the actions:
+
+   | Action | Effect |
+   |---|---|
+   | Skip the Inbox (archive it) | The message goes straight to All mail |
+   | Mark as read | It arrives already read |
+   | Star it | It gets a star |
+   | Never send it to Spam | It's never put in Spam |
+   | Delete it | It goes to Trash |
+   | Apply a label | It gets the label you choose |
+   | Forward it | A copy goes to a verified forwarding address |
+
+5. Save the filter.
+
+</Steps>
+
+Filters apply to new mail only. In the filter list, use **Show matches**, **Edit** or **Delete** on each filter.
+
+## Forwarding
+
+You can only forward to addresses you've verified.
+
+<Steps>
+
+1. Go to **Settings → Forwarding** and add an address under **Add a forwarding address**.
+
+2. Mail sends a confirmation code to that address. Enter it in the **6-digit code** field. The address
+   changes from **Waiting for code** to **Verified**.
+
+3. Turn on **Forward a copy**, choose the address in **Forward to**, and pick what happens to the copy you keep:
+   **Keep it in the Inbox**, **Mark it as read**, **Archive it** or **Delete it**.
+
+</Steps>
+
+## Vacation responder
+
+Go to **Settings → Vacation responder** and turn it on.
+
+| Field | What it does |
+|---|---|
+| First day | When replies start. Leave it empty to start now |
+| Last day | When replies stop. Optional |
+| Subject | The subject of the reply, for example "Out of office" |
+| Message | The reply text, with formatting |
+| Only reply to people I've emailed | Skip senders you haven't written to |
+| Only reply to people in my organization | Skip senders outside your organization |
+
+Each sender gets at most one reply every 4 days. Mail doesn't reply to mailing lists, bulk mail, other
+automatic replies, or addresses such as `noreply@` and `mailer-daemon@`.
+
+## General settings
+
+| Setting | Options |
+|---|---|
+| Reading pane | Right of the list, Below the list, Off |
+| Density | Comfortable, Compact |
+| Mark as read | Immediately, After 1 second, Manually |
+| Undo send | Off, 5, 10, 20 or 30 seconds (default 10) |
+| Reading font | Sans or Serif, for message bodies |
+| Images | Ask before showing, Always show |
+| Keyboard shortcuts | On or off. Press `?` to see them all |
+| Inbox categories | Primary, Updates and Promotions tabs above the Inbox |
+| Swipe right / Swipe left | On touch screens: Archive, Delete, Mark as read or Nothing |
+
+**Signatures** and **Mail apps** have their own tabs. See [Compose and send](/docs/user-guide/mail/compose/)
+and [Connecting apps](/docs/user-guide/connecting-apps/).
+
+<Aside type="tip" title="Theme">
+Light and dark themes are set in your account menu under **Theme**, and apply to every app.
+</Aside>
+
+## Next steps
+
+- [Search](/docs/user-guide/mail/search/)
+- [Mail safety](/docs/user-guide/mail/safety/)

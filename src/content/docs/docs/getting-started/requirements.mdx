@@ -1,0 +1,69 @@
+---
+title: Requirements and sizing
+description: Operating system, Docker, memory, disk, network and DNS requirements, with measured resource use.
+sidebar:
+  order: 3
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** what a server or laptop needs to run Suitehive, and how big a machine to pick for your team.
+
+## Requirements
+
+| | Server install | Local trial |
+|---|---|---|
+| OS | Linux (x86_64 or arm64) | macOS, Linux, or Windows with Docker Desktop |
+| Docker | Docker Engine with Compose v2 | Docker Desktop or Engine with Compose v2 |
+| Memory | 2 GB minimum, 4 GB recommended | 2 GB free |
+| Disk | 10 GB plus your mail | 5 GB |
+| Network | Public IP; inbound 25, 80, 443, 465, 587, 993; outbound 25 | Port 8080 free |
+| DNS | A domain you can add records to | None |
+| Tools | `curl` (or `wget`) and `bash`; `git` for `--build` | Same |
+
+The installer checks for 4 GB of memory. On a smaller server, add `--skip-checks` to continue.
+
+## Ports
+
+| Port | Protocol | Used for |
+|---|---|---|
+| 80, 443 | HTTP, HTTPS | Web apps, APIs, CalDAV, and Let's Encrypt certificates |
+| 25 | SMTP | Receiving mail from other servers, and sending to them |
+| 465 | SMTP with TLS | Sending from mail apps |
+| 587 | SMTP with STARTTLS | Sending from mail apps |
+| 993 | IMAP with TLS | Reading mail in mail apps |
+| 8080 | HTTP | Local trial only |
+
+## Measured footprint
+
+Measured at idle with demo data, the whole stack (Auth, Mail, Calendar, PostgreSQL, NATS) uses about
+**400 MB of RAM** and **0.7 GB of disk** before any mail is stored. Auth briefly uses about 64 MB more per
+sign-in while it hashes the password.
+
+## Sizing
+
+| Team size | CPU | RAM | Disk |
+|---|---|---|---|
+| Trial, up to 10 users | 1 vCPU | 2 GB | 10 GB SSD |
+| Small team, up to 50 users | 2 vCPU | 4 GB | 40 GB SSD plus mailbox storage |
+| Around 500 users | 4 vCPU | 8 GB | 100 GB or more, S3-compatible storage for mail |
+
+- **Mail fills the disk.** Plan for users × average mailbox size, for example 50 users × 2 GB ≈ 100 GB.
+  An attachment sent to many people is stored once.
+- **Optional filters need memory.** ClamAV antivirus needs about 1 to 1.5 GB more RAM, and rspamd spam
+  filtering about 300 MB. With both turned on, 4 GB is the practical minimum.
+- The 500-user row is an estimate. Load testing has not been done yet.
+
+## Cloud provider checks
+
+<Aside type="caution" title="Port 25 is often blocked">
+Many cloud providers block outbound port 25 by default. Ask your provider to open it, or send outgoing
+mail through a [smarthost](/docs/self-hosting/smarthost/).
+</Aside>
+
+Set the reverse DNS (PTR) of your server's IP address to your Suitehive hostname, for example
+`suite.example.com`. You do this at your VPS provider, not at your DNS host.
+
+## Next steps
+
+- [Quick start](/docs/getting-started/quick-start/)
+- [DNS setup](/docs/getting-started/dns/)

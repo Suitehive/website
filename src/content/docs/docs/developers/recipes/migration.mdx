@@ -1,0 +1,117 @@
+---
+title: Add a database migration with RLS
+description: Add a forward-only SQL migration to a Suitehive service, with the org_id column and Row Level Security policy every tenant table needs.
+sidebar:
+  order: 3
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how to add a table to a service's database so that one organization can never see another's rows.
+
+Background: [Multi-tenancy and RLS](/docs/developers/concepts/multi-tenancy/).
+
+## Rules
+
+- **Forward-only.** No `-- +goose Down` section. To undo something, write a new migration.
+- **Safe on a live database.** Avoid long locks: for example, add an index on a big table in its own migration.
+- **One numbered file per change**, named `NNNNN_description.sql`, numbered without gaps.
+- **Every tenant table** has `org_id uuid NOT NULL` and the `tenant_isolation` policy.
+
+## Steps
+
+<Steps>
+
+1. **Find the next number.**
+
+   ```sh
+   ls mail/migrations
+   ```
+
+   ```text title="Output"
+   00001_directory_read_model.sql
+   00002_mailbox.sql
+   00003_inbound_outbound.sql
+   00004_rules_settings_search.sql
+   00005_api_outbound.sql
+   migrations.go
+   migrations_test.go
+   ```
+
+   Your file is `mail/migrations/00006_<what_it_adds>.sql`.
+
+2. **Write the table and its policy in the same file.**
+
+   Start the file with `-- +goose Up`. Here is a real table from Mail, the pattern to copy:
+
+   ```sql title="mail/migrations/00004_rules_settings_search.sql"
+   -- +goose Up
+   CREATE TABLE filters (
+     id         uuid PRIMARY KEY,
+     org_id     uuid NOT NULL,
+     mailbox_id uuid NOT NULL REFERENCES mailboxes (id) ON DELETE CASCADE,
+     position   int NOT NULL CHECK (position >= 0),
+     conditions jsonb NOT NULL,
+     actions    jsonb NOT NULL
+   );
+   CREATE INDEX filters_mailbox ON filters (mailbox_id, position);
+
+   ALTER TABLE filters ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE filters FORCE ROW LEVEL SECURITY;
+   CREATE POLICY tenant_isolation ON filters USING (org_id = NULLIF(current_setting('app.org_id', true), '')::uuid);
+   ```
+
+   You do not have to type the policy by hand. `kit/db.RLSPolicySQL` returns it:
+
+   ```go title="kit/db/rls.go"
+   func RLSPolicySQL(table string) string {
+   	t := pgx.Identifier{table}.Sanitize()
+   	return fmt.Sprintf("ALTER TABLE %s ENABLE ROW LEVEL SECURITY;\nCREATE POLICY tenant_isolation ON %s USING (org_id = %s);\n",
+   		t, t, OrgSettingExpr)
+   }
+   ```
+
+   Add the `FORCE ROW LEVEL SECURITY` line yourself, as Mail, Calendar and Auth do. It applies the policy to the table owner too.
+
+3. **Check the embedded file list and the tests.**
+
+   Migrations are embedded with `//go:embed *.sql`, so the new file is picked up automatically. Each service also has a migration test:
+
+   | Service | What its test checks | What you do |
+   |---|---|---|
+   | Mail | `mail/migrations/migrations_test.go`: numbering, `-- +goose Up` header, no `Down`, and RLS (enabled, forced, policy) on every table with `org_id` | nothing extra |
+   | Calendar | `calendar/migrations/migrations_test.go` and `migrations_pg_test.go` | add the table to `TenantTables` (or `SystemTables`) in `calendar/migrations/migrations.go` |
+   | Auth | `auth/migrations/migrations_test.go` and `auth/test/dbsec` (RLS enabled and forced on every tenant table) | nothing extra |
+
+   ```sh
+   go test ./mail/migrations/ -count=1
+   ```
+
+4. **Apply it.**
+
+   Services apply their migrations on start (Mail's `SH_MIGRATE` defaults to `true`). Restart the service, or apply and exit:
+
+   ```sh
+   go run ./mail/cmd/mail migrate
+   ```
+
+   Look for the log line `migrations applied`.
+
+5. **Test tenant isolation.**
+
+   Write an integration test that runs as a role without superuser rights, so RLS applies. See [Write a test](/docs/developers/recipes/tests/#integration-test-with-the-dev-postgres).
+
+</Steps>
+
+<Aside type="note" title="Tables without org_id">
+A few tables are read before the tenant is known, such as Mail's `inbound_queue`. They have no `org_id` and no policy, and only system code (`db.SystemRunner`) touches them. Keep this rare and explain it in a comment at the top of the migration.
+</Aside>
+
+<Aside type="caution" title="Kit tables are not yours">
+The `outbox`, `inbox`, `jobs`, idempotency and `audit_log` tables come from kit's own migration sources, which each service runs before its own. Do not copy them into a service migration.
+</Aside>
+
+## Next steps
+
+- [Write a test](/docs/developers/recipes/tests/)
+- [Multi-tenancy and RLS](/docs/developers/concepts/multi-tenancy/)
+- [Add a REST endpoint](/docs/developers/recipes/rest-endpoint/)

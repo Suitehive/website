@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the website
+        uses: actions/checkout@v4
+        with:
+          path: website
+
+      # The API reference is generated from the OpenAPI specs in the contracts repo,
+      # which the build reads from ../contracts/openapi.
+      - name: Check out contracts
+        uses: actions/checkout@v4
+        with:
+          repository: Suitehive/contracts
+          path: contracts
+          token: ${{ secrets.CONTRACTS_READ_TOKEN || github.token }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install
+        working-directory: website
+        run: npm ci
+
+      - name: Build (includes the Starlight link validator)
+        working-directory: website
+        run: npm run build
+
+      - name: Check links in the built site
+        working-directory: website
+        run: npm run check:links

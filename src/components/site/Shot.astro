@@ -1,0 +1,50 @@
+---
+import { Picture } from 'astro:assets';
+import type { ImageMetadata } from 'astro';
+
+interface Props {
+  light: ImageMetadata;
+  dark?: ImageMetadata;
+  alt: string;
+  url?: string;
+  /** Load eagerly (above the fold). */
+  eager?: boolean;
+  sizes?: string;
+  class?: string;
+}
+const { light, dark, alt, url, eager = false, sizes = '(min-width: 1180px) 1100px, 100vw', class: cls } = Astro.props;
+const widths = [640, 960, 1280, 1600, 2200];
+const loading = eager ? 'eager' : 'lazy';
+const fetchpriority = eager ? 'high' : undefined;
+---
+<figure class:list={['shot', cls]}>
+  <div class="bar" aria-hidden="true">
+    <span class="dots"><i></i><i></i><i></i></span>
+    {url && <span class="url"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>{url}</span>}
+  </div>
+  <div class="frame">
+    <Picture src={light} alt={alt} formats={['avif', 'webp']} widths={widths} sizes={sizes} loading={loading} fetchpriority={fetchpriority} class:list={['img', dark && 'img-light']} />
+    {dark && <Picture src={dark} alt="" formats={['avif', 'webp']} widths={widths} sizes={sizes} loading="lazy" class="img img-dark" />}
+  </div>
+</figure>
+
+<style>
+  .shot {
+    margin: 0; border-radius: 18px; overflow: hidden; background: var(--surface);
+    border: 1px solid var(--line); box-shadow: var(--shadow-shot);
+  }
+  .bar { height: 40px; display: flex; align-items: center; gap: 16px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--surface); }
+  .dots { display: flex; gap: 6px; }
+  .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--line-strong); }
+  .url { display: inline-flex; align-items: center; gap: 6px; margin: 0 auto; transform: translateX(-24px); font-size: 0.8rem; color: var(--subtle); background: var(--paper-2); padding: 4px 14px; border-radius: 999px; }
+  .url svg { width: 12px; height: 12px; }
+  .frame :global(img) { width: 100%; height: auto; display: block; }
+  .frame :global(.img-dark) { display: none; }
+  :global(:root[data-theme='dark']) .frame :global(.img-dark) { display: block; }
+  :global(:root[data-theme='dark']) .frame :global(.img-light) { display: none; }
+  @media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme='light'])) .frame :global(.img-dark) { display: block; }
+    :global(:root:not([data-theme='light'])) .frame :global(.img-light) { display: none; }
+  }
+  @media (max-width: 640px) { .bar { height: 30px; } .dots i { width: 8px; height: 8px; } .url { font-size: 0.7rem; padding: 2px 10px; } .shot { border-radius: 12px; } }
+</style>

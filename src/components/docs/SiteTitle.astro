@@ -1,0 +1,20 @@
+---
+import HiveMark from '../HiveMark.astro';
+---
+<a href="/docs/" class="sh-site-title" aria-label="Suitehive Docs home">
+  <HiveMark size={26} />
+  <span class="name">Suitehive</span>
+  <span class="tag">Docs</span>
+</a>
+
+<style>
+  .sh-site-title {
+    display: inline-flex; align-items: center; gap: 0.55rem;
+    text-decoration: none; color: var(--sl-color-white); white-space: nowrap;
+  }
+  .name { font-family: 'Outfit Variable', sans-serif; font-weight: 700; font-size: 1.22rem; letter-spacing: -0.035em; }
+  .tag {
+    font-size: 0.78rem; font-weight: 600; color: var(--sl-color-accent-high);
+    background: var(--sl-color-accent-low); padding: 0.12rem 0.5rem; border-radius: 6px; letter-spacing: 0.01em;
+  }
+</style>

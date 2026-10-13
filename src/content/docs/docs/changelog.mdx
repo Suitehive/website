@@ -1,0 +1,68 @@
+---
+title: Changelog
+description: What has changed in Suitehive, starting with the unreleased work that exists today.
+sidebar:
+  order: 3
+---
+import { Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** what exists in Suitehive today and which limitations to expect.
+
+<Aside type="caution" title="No releases yet">
+Suitehive has no tagged release and no published container images. Everything below is unreleased and can change.
+</Aside>
+
+## Unreleased
+
+### Whole stack
+
+- Auth, Mail and Calendar run together end to end on PostgreSQL and NATS: sign in, receive a session token, open the inbox and the calendar, all through the web apps' own routes.
+- Measured footprint at idle with demo data: about 400 MB of RAM and 0.7 GB of disk before mail.
+- `suitehive` CLI and installers (`install.sh`, `install.ps1`) with `install`, `status`, `logs`, `upgrade`, `backup`, `restore`, `dns` and `uninstall`, Docker Compose and Caddy templates.
+
+### Auth and Admin
+
+- Sign-in with passwords, authenticator apps (TOTP), passkeys and recovery codes; app passwords for IMAP, SMTP and CalDAV.
+- OpenID Connect provider used by Mail and Calendar.
+- External sign-in with Google, Microsoft or any OpenID Connect provider (OIDC federation).
+- Full admin console: users, groups, domains with a live DNS checklist, roles with a permission matrix, security policies, apps and health, audit log with live view, organization and branding.
+
+### Mail
+
+- IMAP server and SMTP submission (ports 993, 465 and 587).
+- Optional rspamd spam scoring and ClamAV virus scanning; MTA-STS for outgoing mail.
+- Settings, filters and search with Gmail-style operators.
+- PDF viewer for attachments and a redesigned warning before you open suspicious links.
+
+### Calendar
+
+- CalDAV for phone and desktop calendar apps.
+- Event editor, find a time, and day, week, month and schedule views.
+
+### All web apps
+
+- Right-click menus across Mail, Calendar and Admin.
+
+### Security fixes
+
+- Removed a timing difference in sign-in that could reveal whether an account exists.
+- Refresh tokens are now properly revoked.
+- Row-level security is now enforced even when the database login is a superuser.
+- Fixed an account lookup at sign-in for domains that are still pending verification.
+
+### Known limitations
+
+- Container images aren't published, so `suitehive install` needs `--build` or `--dry-run`.
+- Not tested on a real server end to end, and not load-tested.
+- Invitation and password-reset emails may not be delivered on a fresh install ([details](/docs/self-hosting/troubleshooting/#invitation-and-password-reset-emails-dont-arrive)), and reset links point to a page the web app doesn't serve ([workaround](/docs/admin/users/)).
+- Calendar may reject invitation replies between people on your own domain.
+- Mail and Calendar have no sections in the admin console yet; DKIM, the outbound queue and smarthost routing are API only.
+- Deleting a user doesn't transfer or purge their Mail and Calendar data yet.
+- The 2-step "Enforce from" date is stored but not applied.
+- No CSV import of users, no audit log export, no registration of your own OpenID Connect apps.
+- No Contacts, Drive or Docs yet. See the [Roadmap](/docs/roadmap/).
+
+## Next steps
+
+- [Roadmap](/docs/roadmap/)
+- [FAQ](/docs/faq/)

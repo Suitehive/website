@@ -1,0 +1,137 @@
+---
+title: Glossary
+description: Plain-language definitions of the terms used across the Suitehive developer and architecture docs.
+sidebar:
+  order: 9
+---
+
+**What you'll learn:** what the recurring terms in these docs mean, in one or two sentences each.
+
+### Access token
+
+A short-lived signed token (a [JWT](#jwt)) that proves who is calling. Auth issues it; it is valid for 10 minutes. Web apps send it as `Authorization: Bearer <token>`.
+
+### Adapter
+
+Code that connects a use case to the outside world: an HTTP handler, a Postgres store, a NATS consumer, an SMTP listener. Adapters live in `adapters/` folders. See [Layering](/docs/developers/concepts/layering/).
+
+### App password
+
+A separate password a user creates for a mail or calendar app (IMAP, SMTP submission, CalDAV). It can be revoked on its own and is stored only as a hash.
+
+### Audience
+
+The `aud` claim in an access token: the list of services the token is meant for, such as `mail` or `calendar`. A service refuses tokens that do not name it.
+
+### Composition root
+
+The one place that builds the objects and connects them: `cmd/<service>/main.go`, and `module.go` inside each module.
+
+### ConnectRPC
+
+The library used for service-to-service calls. It is compatible with gRPC, runs over plain HTTP and is defined in protobuf files in `contracts/proto`.
+
+### Contract
+
+The agreed shape of an API or message, kept in the [contracts](https://github.com/Suitehive/contracts) repository: OpenAPI for REST, protobuf for RPC and events.
+
+### Dead-letter queue (DLQ)
+
+Where an event goes after it has failed too many times (20 deliveries by default), so it stops blocking others. In Suitehive this is the `SH_DLQ` stream.
+
+### Dev seed
+
+Demo data a service creates when started with `SH_DEV_SEED=true`: the org Demo, the domain `suitehive.local`, three users, demo mail and demo events.
+
+### Envelope encryption
+
+Each secret is encrypted with its own data key, and that key is encrypted with the master key (`SH_MASTER_KEY`). It lets the master key be rotated. Implemented by `kit/crypto.SecretBox`.
+
+### ETag and If-Match
+
+Optimistic locking over HTTP. A response carries the record's version in `ETag`; an update sends it back in `If-Match`. If someone else changed the record first, the update fails with `412`.
+
+### Event
+
+A message that says something happened, such as `sh.auth.user.created.v1`. Services publish events through the [outbox](#outbox) and other services react to them. See [Events](/docs/developers/concepts/events/).
+
+### Idempotency key
+
+A unique value a client sends in the `Idempotency-Key` header, so a retried request is not applied twice.
+
+### Inbox
+
+A table that records which events a handler has already processed. Before a handler runs, it inserts the event ID; if the ID is already there, the event is skipped.
+
+### JetStream
+
+The persistence layer of [NATS](https://nats.io), the message server Suitehive uses for events. It stores events in streams (one per service, such as `SH_MAIL`) so they survive restarts.
+
+### JWKS
+
+JSON Web Key Set: the public keys Auth publishes at `/jwks`. Services download them to check token signatures without calling Auth.
+
+### JWT
+
+JSON Web Token: a signed, base64-encoded JSON document. Suitehive tokens are signed with ES256.
+
+### Mock mode
+
+A web app setting (`VITE_API_MODE=mock`, the default) that replaces the real API with in-memory demo data, so you can work on the UI without running any service.
+
+### Module
+
+A folder under `internal/` that owns one capability of a service, such as `mail/internal/inbound`. Other modules may only use its `api/` package.
+
+### OIDC
+
+OpenID Connect, the standard sign-in protocol. Auth is an OIDC provider; today its registered clients are Mail and Calendar.
+
+### Org
+
+An organization: one customer of a Suitehive installation, with its own users, domains and data. Also called a tenant. Most tables have an `org_id` column.
+
+### Outbox
+
+A table where a service writes its events in the same database transaction as the change itself. A background relay then sends them to NATS. This way an event is never lost and never sent for a change that was rolled back.
+
+### Port
+
+An interface that a use case declares for something it needs, such as `UserRepo` or `EmailSender`. Adapters implement ports.
+
+### Problem+json
+
+The standard error format for HTTP APIs (RFC 9457): a JSON body with `status`, `title`, `detail` and a stable `code`.
+
+### Protobuf
+
+Protocol Buffers, a compact message format with a schema language. Used for RPC calls and event payloads.
+
+### Read-model
+
+A local copy of another service's data, built from its events. Mail keeps a copy of Auth's directory so it can accept mail even when Auth is down.
+
+### RLS
+
+Row Level Security: a Postgres feature that filters rows by a policy. Suitehive uses it so a query only ever sees the current org's rows. See [Multi-tenancy](/docs/developers/concepts/multi-tenancy/).
+
+### Service client
+
+The identity a service uses when it calls another service, such as `svc:mail`. It gets tokens from Auth with a client ID and secret (OAuth2 client credentials).
+
+### SSE
+
+Server-Sent Events: a long-lived HTTP response the server writes updates into. The web apps use it to hear about new mail and calendar changes.
+
+### Use case
+
+One action the system can perform, as one struct with a `Handle` method, such as `SuspendUser`. Use cases live in `app/` folders.
+
+### UUIDv7
+
+The ID format used everywhere. UUIDv7 values start with a timestamp, so they sort in creation order.
+
+## Next steps
+
+- [How Suitehive fits together](/docs/developers/how-it-fits/)
+- [Layering inside a service](/docs/developers/concepts/layering/)

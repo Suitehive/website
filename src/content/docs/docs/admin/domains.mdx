@@ -1,0 +1,87 @@
+---
+title: Domains
+description: Add a domain, prove you own it with a TXT record, set up mail DNS with a live checklist, and understand DKIM keys.
+sidebar:
+  order: 4
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how domain verification works, which DNS records Mail needs, how DKIM keys are created, and how to remove a domain.
+
+People's addresses and group addresses must be on a **verified** domain. `suitehive install` adds your first domain for you; add more in **Admin › Directory › Domains** (`/admin/domains`). Managing domains needs the `auth.domain.manage` permission.
+
+## Add and verify a domain
+
+<Steps>
+1. Click **Add domain** and enter the name, for example `example.org`. International names are accepted and stored in their ASCII form.
+2. Copy the verification record that is shown. It is a **TXT** record on the domain itself (`@`):
+
+   | Type | Name | Value |
+   |---|---|---|
+   | TXT | `example.org` | `suitehive-verification=<token>` |
+
+   A TXT record can sit next to other TXT records on the same name, such as SPF.
+3. Add it at your DNS provider.
+4. Wait. While a domain is pending, the page checks every 10 seconds, and the server rechecks it in the background. Click **Recheck** to check now.
+</Steps>
+
+A pending domain expires after **7 days** without verification. Add it again to get a new chance.
+
+## Domain states
+
+| State | Meaning |
+|---|---|
+| **Pending** | Waiting for the TXT record |
+| **Verified** | Ownership proven. Addresses can use it. |
+| **Degraded** | The TXT record failed 3 daily rechecks in a row. Mail keeps working, but put the record back. A passing recheck makes it verified again. |
+| **Expired** | Not verified within 7 days, or another organization verified it first |
+| **Removed** | Removed by an admin |
+
+Keep the TXT record after verification: it is rechecked every day.
+
+**Takeover protection:** a domain verified by one organization can't be added by another. If two organizations try, the first to verify wins and the other's claim expires.
+
+When a domain is verified, Suitehive creates `postmaster@` and `abuse@` on it as aliases of the first owner.
+
+## Mail DNS checklist
+
+Once a domain is verified, its page shows **Point mail here**: the records Mail needs, each checked live and marked **Found**, **Missing**, **Different value** or **Lookup failed**. The page rechecks every 30 seconds until all required records are found. For `example.org` with Suitehive at `suite.example.com`:
+
+| Type | Name | Value | Required |
+|---|---|---|---|
+| MX | `example.org` | `10 suite.example.com` | Yes |
+| TXT | `example.org` | `v=spf1 mx -all` | Yes |
+| TXT | `sh1._domainkey.example.org` | DKIM public key (see below) | Yes |
+| TXT | `_dmarc.example.org` | `v=DMARC1; p=quarantine; rua=mailto:dmarc-reports@example.org` | Yes |
+| TXT | `_smtp._tls.example.org` | `v=TLSRPTv1; rua=mailto:tls-reports@example.org` | Optional |
+| SRV | `_imaps._tcp.example.org` | `0 1 993 suite.example.com` | Optional |
+| SRV | `_submissions._tcp.example.org` | `0 1 465 suite.example.com` | Optional |
+| CNAME | `autoconfig.example.org` | `suite.example.com` | Optional |
+| SRV | `_caldavs._tcp.example.org` | `0 1 443 suite.example.com` | Optional |
+
+Use the exact values the page shows; they come from your server's settings. `suitehive dns --check` checks the same records for your first domain from the server. See [DNS records](/docs/getting-started/dns/).
+
+Also set the reverse DNS (PTR) of your server's IP address to your Suitehive hostname at your hosting provider. That isn't a record in your domain's DNS.
+
+## DKIM
+
+Mail signs outgoing messages with DKIM. When a domain is verified, Mail creates two keys for it, **RSA-2048** and **Ed25519**, with selectors `sh1`, `sh2` and so on (a selector is never reused). The TXT records appear in the checklist above as `<selector>._domainkey.<domain>`. A key starts as **pending DNS**, becomes **active**, and later **retired**.
+
+<Aside type="note" title="DKIM management is API only for now">
+Rotating and retiring keys exist in Mail's admin API (`POST /api/mail/admin/domains/{domain}/dkim:rotate` and `.../dkim/{selector}:retire`, permission `mail.admin.dkim.manage`), but the admin console doesn't have a Mail section for them yet. See the [Mail API reference](/docs/api/mail/).
+</Aside>
+
+## Remove a domain
+
+From the domain's menu choose **Remove domain…** and type the domain name to confirm.
+
+- A **pending** domain can be removed at any time and added again later.
+- A **verified** domain can be removed only when no addresses use it (the automatic `postmaster@` and `abuse@` aliases don't count and are removed with it). Mail to the domain is no longer accepted afterwards.
+
+Other row actions: **Open DNS setup**, **Recheck now** and **Copy verification record**.
+
+## Next steps
+
+- [Users](/docs/admin/users/)
+- [DNS records](/docs/getting-started/dns/)
+- [Troubleshooting](/docs/self-hosting/troubleshooting/#the-domain-doesnt-verify)

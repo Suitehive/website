@@ -1,0 +1,33 @@
+---
+title: Suitehive documentation
+description: Install Suitehive, use Mail and Calendar, run the admin console, and contribute to the code.
+tableOfContents: false
+pagination: false
+---
+import { LinkCard, CardGrid, Aside } from '@astrojs/starlight/components';
+
+Suitehive is an open-source, self-hostable alternative to Google Workspace: Mail, Calendar and single
+sign-on for your team, on your own domain and your own server.
+
+<Aside type="caution" title="Early development">
+Suitehive is not production-ready yet. Container images haven't been published, so the installer needs
+`--build` (build from source) or `--dry-run` until the first release.
+</Aside>
+
+## Start here
+
+<CardGrid>
+  <LinkCard title="What is Suitehive" href="/docs/getting-started/" description="What it does today, what's planned, and who it's for." />
+  <LinkCard title="Quick start" href="/docs/getting-started/quick-start/" description="Install on a server, or try it on your laptop with demo users." />
+</CardGrid>
+
+## Find your guide
+
+<CardGrid>
+  <LinkCard title="User guide" href="/docs/user-guide/mail/overview/" description="Mail, Calendar, your account, and connecting phone and desktop apps." />
+  <LinkCard title="Admin guide" href="/docs/admin/overview/" description="Users, groups, domains, roles, security policies and the audit log." />
+  <LinkCard title="Self-hosting" href="/docs/self-hosting/cli/" description="The suitehive CLI, configuration, backups, upgrades and troubleshooting." />
+  <LinkCard title="Developers" href="/docs/developers/first-15-minutes/" description="Run the whole stack locally in 15 minutes, then follow task-based recipes." />
+  <LinkCard title="Architecture" href="/docs/architecture/overview/" description="Services, events, multi-tenancy and the security model." />
+  <LinkCard title="API reference" href="/docs/api/auth/" description="REST APIs for Auth, Mail and Calendar, generated from the OpenAPI specs." />
+</CardGrid>

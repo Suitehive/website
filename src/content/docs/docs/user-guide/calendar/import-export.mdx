@@ -1,0 +1,61 @@
+---
+title: Import and export
+description: Bring events in from an .ics file and export a calendar or a single event as iCalendar.
+sidebar:
+  order: 7
+---
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**What you'll learn:** how to import events from another calendar app and how to export your own.
+
+Suitehive reads and writes standard iCalendar (`.ics`) files. Its reader is tested against files from Google,
+Outlook and Apple, including Windows time zone names.
+
+## Import an .ics file
+
+<Steps>
+
+1. Export your calendar from the old app as an `.ics` file.
+
+2. In Calendar, select **Add calendar → Import from .ics**, or go to **Settings → Import**.
+
+3. Drop the file on **Drop an .ics file here**, or select **Choose an .ics file**.
+
+4. Pick the calendar in **Add events to** and select **Import**.
+
+</Steps>
+
+When it's done, **Import finished** shows how many events were **Created**, **Updated** and **Skipped**, and
+lists each skipped entry with a reason. Common reasons:
+
+| Reason | Meaning |
+|---|---|
+| Invalid date | A date or time couldn't be read |
+| No start time | The entry has no start |
+| Unsupported repeat rule | The repeat rule couldn't be read |
+| Not an event (to-do or journal) | Only events are imported |
+
+Events are matched by their iCalendar UID. If an event is already in the calendar, the import updates it
+instead of adding a copy, and skips it if the file has an older version.
+
+## Export a calendar
+
+- Right-click the calendar in the sidebar and choose **Export**, or
+- open its settings and select **Export .ics** under **Export and remove**.
+
+You get one `.ics` file with all the calendar's events. You can't export a calendar you can only see as free/busy.
+
+## Export one event
+
+Right-click an event and choose **Export .ics**, or open the event and use **Options**. Send the file to
+someone or open it in another calendar app.
+
+<Aside type="tip" title="Keep another app in sync">
+An export is a one-time copy. To keep another app up to date, use CalDAV or the private iCal address. See
+[Connecting apps](/docs/user-guide/connecting-apps/) and [Sharing](/docs/user-guide/calendar/sharing/).
+</Aside>
+
+## Next steps
+
+- [Sharing calendars](/docs/user-guide/calendar/sharing/)
+- [Connecting apps](/docs/user-guide/connecting-apps/)
