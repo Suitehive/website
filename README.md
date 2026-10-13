@@ -24,8 +24,9 @@ npm install
 npm run dev        # http://localhost:5400
 ```
 
-The API reference reads the OpenAPI specs from `../contracts/openapi/*.yaml`, so clone the
-[contracts](https://github.com/Suitehive/contracts) repo next to this one (the normal workspace layout).
+The API reference is built from the OpenAPI specs committed in `./openapi/`, so the site builds on its own
+(Vercel, CI, a fresh clone). When the [contracts](https://github.com/Suitehive/contracts) repo changes, refresh
+them with `npm run sync:openapi` (it copies from `../contracts/openapi` when that folder exists) and commit.
 
 ## Build
 
@@ -80,10 +81,9 @@ Screenshots in `src/assets/screenshots/` are taken from a running development st
 
 ## CI
 
-`.github/workflows/ci.yml` checks out this repo and `Suitehive/contracts` side by side, installs, builds
-and runs the link checker. While the repos are private, add a repository secret
-`CONTRACTS_READ_TOKEN` (a fine-grained token with read access to `Suitehive/contracts`).
+`.github/workflows/ci.yml` installs, builds and runs the link checker. It needs no secrets: the OpenAPI specs
+are committed in `./openapi/`.
 
 ## License
 
-Not chosen yet, same as the rest of Suitehive.
+[AGPL-3.0](LICENSE), same as the rest of Suitehive.

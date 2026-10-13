@@ -1,0 +1,2540 @@
+openapi: 3.1.0
+info:
+  title: Suitehive Calendar API
+  version: 0.1.0
+  license:
+    name: AGPL-3.0-or-later
+    identifier: AGPL-3.0-or-later
+  description: |
+    Public REST API of the **Calendar** service. Source of truth: `docs/design/05-lld-calendar.md` §9.
+
+    ## Conventions
+    - All paths are under `/api/calendar` (plus the public ICS feed `/ical/...`). JSON, `camelCase`, UUIDv7 ids.
+    - Auth: `Authorization: Bearer <jwt>` whose `aud` includes `calendar`.
+    - Cursor pagination `?limit=&cursor=` → `{ items, nextCursor }`.
+    - Errors: RFC 9457 `application/problem+json` with stable `code` (see `ErrorCode`) and `fields`.
+    - Concurrency: events, calendars and settings carry `ETag: "<version>"`; `PATCH /events/{id}` **requires** `If-Match` → `412`.
+
+    ## Time model (read carefully)
+    - **Timed events** are stored as *local wall time + IANA time zone*:
+      `{"dateTime": "2026-10-13T09:00:00", "timeZone": "Europe/Berlin"}` — `dateTime` has **no offset**.
+      A weekly 09:00 Berlin meeting stays 09:00 Berlin across DST.
+    - **All-day events** are floating dates: `{"date": "2026-10-13"}`; `end.date` is **exclusive**.
+    - Derived UTC values (`startUtc`, `endUtc`, `seriesEndUtc`) are RFC 3339 UTC and read-only.
+    - **Instances** (`GET /instances`) are expanded occurrences with UTC times (`startUtc`/`endUtc`) for timed
+      events or `startDate`/`endDate` for all-day events. Instance id = `<eventId>_<recurrenceId>` where
+      `recurrenceId` is the original start in compact UTC (`20261013T070000Z`) or, for all-day series, `20261013`.
+    - `recurrenceId` parameters/fields use the same compact form.
+    - Recurrence is an RFC 5545 `RRULE` value without the `RRULE:` prefix (`FREQ=WEEKLY;BYDAY=MO,WE;UNTIL=20270630T215959Z`).
+      `SECONDLY`/`MINUTELY` are rejected. Max query window 366 days; max 1000 instances per series per call.
+
+    ## Edit scopes
+    `scope=this|following|all` with `instance=<recurrenceId>` for `this`/`following` (05-lld §6.2/6.3).
+servers:
+  - url: /
+    description: Same origin as the gateway (paths are absolute).
+tags:
+  - name: calendars
+    description: Own calendars, shares, ICS export and feeds.
+  - name: events
+    description: Event masters, edits with scope, RSVP.
+  - name: instances
+    description: Expanded instances (main read path) and search.
+  - name: availability
+    description: Free/busy and find-a-time.
+  - name: resources
+    description: Rooms and other bookable resources.
+  - name: sync
+    description: Delta API and SSE change feed.
+  - name: import
+    description: ICS import.
+  - name: settings
+    description: Per-user calendar settings.
+security:
+  - bearerAuth: []
+
+paths:
+  # ---------------------------------------------------------------- calendars
+  /api/calendar/calendars:
+    get:
+      tags: [calendars]
+      operationId: listCalendars
+      summary: Calendars visible to the user (own, shared with them, resources they manage), with the caller's access role.
+      responses:
+        '200':
+          description: Calendars (primary first).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CalendarList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [calendars]
+      operationId: createCalendar
+      summary: Create a secondary calendar.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CalendarInput'
+      responses:
+        '201':
+          description: Created.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Location:
+              $ref: '#/components/headers/Location'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Calendar'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/calendar/calendars/{id}:
+    get:
+      tags: [calendars]
+      operationId: getCalendar
+      summary: Get a calendar.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Calendar.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Calendar'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [calendars]
+      operationId: updateCalendar
+      summary: Update name, color, time zone, default reminders, availability/feed flags.
+      description: '`name`/`timeZone`/`defaultReminders` need `manager` (or owner); `color`, `hidden`, `countsForAvailability` are per-viewer and always allowed.'
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CalendarPatch'
+      responses:
+        '200':
+          description: Updated.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Calendar'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+    delete:
+      tags: [calendars]
+      operationId: deleteCalendar
+      summary: Delete a secondary calendar (owner). The primary calendar → `409 calendar.calendar.primary_undeletable`. For a calendar shared with the caller, this unsubscribes.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/calendar/calendars/{id}/shares:
+    get:
+      tags: [calendars]
+      operationId: listShares
+      summary: Sharing (ACL) entries (requires `manager`).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Shares.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShareList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [calendars]
+      operationId: putShares
+      summary: Replace the whole ACL (requires `manager`).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShareListInput'
+      responses:
+        '200':
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShareList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [calendars]
+      operationId: deleteShare
+      summary: Remove one grantee's share (requires `manager`).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: granteeType
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/GranteeType'
+        - name: granteeId
+          in: query
+          description: Required for `user` and `group`.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Removed.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/calendar/calendars/{id}/export.ics:
+    get:
+      tags: [calendars]
+      operationId: exportCalendar
+      summary: Export a calendar as iCalendar.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: iCalendar file.
+          content:
+            text/calendar:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/calendar/calendars/{id}:rotateFeedToken:
+    post:
+      tags: [calendars]
+      operationId: rotateFeedToken
+      summary: Enable the private iCal feed or reset its secret link (old URL stops working). Owner only.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: New feed URL — shown only in this response (token is stored hashed).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeedToken'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /ical/{calendarId}/{token}.ics:
+    get:
+      tags: [calendars]
+      operationId: getPrivateFeed
+      summary: Private iCal feed (secret URL, no other auth).
+      security: []
+      parameters:
+        - name: calendarId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: iCalendar feed.
+          content:
+            text/calendar:
+              schema:
+                type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------------------- instances
+  /api/calendar/instances:
+    get:
+      tags: [instances]
+      operationId: listInstances
+      summary: Expanded instances for the views (main read path).
+      description: |
+        Returns every instance overlapping `[from, to)` across the requested calendars, sorted by start.
+        `free_busy` access and other people's private events → `accessLevel: busy` (no summary/location/attendees).
+        Window > 366 days → `400 calendar.instances.window_too_large`.
+      parameters:
+        - name: calendars
+          in: query
+          required: true
+          description: Comma-separated calendar ids.
+          schema:
+            type: array
+            minItems: 1
+            maxItems: 100
+            items:
+              type: string
+              format: uuid
+          style: form
+          explode: false
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: tz
+          in: query
+          required: true
+          description: Viewer's IANA time zone (used to select all-day events by date).
+          schema:
+            type: string
+        - name: showDeclined
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Instances.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/calendar/search:
+    get:
+      tags: [instances]
+      operationId: searchEvents
+      summary: Event search over summary, location and attendees (returns matching instances, nearest first from `from`).
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+        - name: calendars
+          in: query
+          description: Restrict to these calendars (default all readable).
+          schema:
+            type: array
+            items:
+              type: string
+              format: uuid
+          style: form
+          explode: false
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: tz
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Page of matching instances (never includes busy-only entries).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstancePage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ---------------------------------------------------------------- events
+  /api/calendar/calendars/{id}/events:
+    post:
+      tags: [events]
+      operationId: createEvent
+      summary: Create an event (CreateEvent). Attendees get invitations; rooms are booked atomically.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventInput'
+      responses:
+        '201':
+          description: Created.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Location:
+              $ref: '#/components/headers/Location'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventMutationResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/IdempotencyMismatch'
+
+  /api/calendar/events/{id}:
+    get:
+      tags: [events]
+      operationId: getEvent
+      summary: Get an event master (or single event) with overrides and attendees.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Event.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Event'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [events]
+      operationId: updateEvent
+      summary: Edit with scope (UpdateEvent). JSON merge-patch semantics; `If-Match` required.
+      description: |
+        - `scope=all` (default for non-recurring) updates the master; on a time change valid overrides shift, orphans are dropped and listed in `droppedOverrides`.
+        - `scope=this` + `instance` upserts an override.
+        - `scope=following` + `instance` splits the series; the response `event` is the **new** series (new `icalUid`) and `previousSeries` the truncated one.
+        Significant changes (start, end, recurrence, location) bump `sequence` and reset attendee replies.
+        Recurring event without `scope` → `400 calendar.event.scope_required`.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IfMatchRequired'
+        - $ref: '#/components/parameters/Scope'
+        - $ref: '#/components/parameters/Instance'
+        - $ref: '#/components/parameters/Notify'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventPatch'
+      responses:
+        '200':
+          description: Updated.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventMutationResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+    delete:
+      tags: [events]
+      operationId: deleteEvent
+      summary: Delete with scope (DeleteEvent). Organizer → CANCEL to attendees; attendee → removes their copy (+ DECLINED reply if `notify`).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/Scope'
+        - $ref: '#/components/parameters/Instance'
+        - $ref: '#/components/parameters/Notify'
+      responses:
+        '204':
+          description: Deleted.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+
+  /api/calendar/events/{id}:respond:
+    post:
+      tags: [events]
+      operationId: respondToEvent
+      summary: RSVP (RespondToInvitation) for the whole series or one instance.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RespondRequest'
+      responses:
+        '200':
+          description: The attendee copy after the response.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Event'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '`calendar.event.not_attendee`.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/calendar/event-lookup:
+    get:
+      tags: [events]
+      operationId: lookupEventByIcalUid
+      summary: Find the caller's copy of an event by iCalendar UID (used by the mail invite card for RSVP).
+      parameters:
+        - name: icalUid
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        '200':
+          description: The event in one of the caller's calendars (primary preferred).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Event'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------------------- availability
+  /api/calendar/freebusy:
+    post:
+      tags: [availability]
+      operationId: queryFreeBusy
+      summary: Busy intervals for people (no event details). Org members have `free_busy` by default.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeBusyRequest'
+      responses:
+        '200':
+          description: Busy intervals per requested person.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeBusyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/calendar/find-time:
+    post:
+      tags: [availability]
+      operationId: findTime
+      summary: Suggest meeting slots within attendees' working hours, plus available rooms.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FindTimeRequest'
+      responses:
+        '200':
+          description: Ranked suggestions (fewest optional conflicts, then earliest).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FindTimeResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ---------------------------------------------------------------- resources
+  /api/calendar/resources:
+    get:
+      tags: [resources]
+      operationId: listResources
+      summary: Rooms and resources, filterable by capacity, features and building.
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+            maxLength: 200
+        - name: capacity
+          in: query
+          description: Minimum capacity.
+          schema:
+            type: integer
+            minimum: 1
+        - name: features
+          in: query
+          description: Comma-separated; all must be present.
+          schema:
+            type: array
+            items:
+              type: string
+          style: form
+          explode: false
+        - name: building
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Page of resources.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourcePage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [resources]
+      operationId: createResource
+      summary: Create a resource and its calendar (permission `calendar.resource.manage`).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceInput'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Resource'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/calendar/resources/{id}:
+    get:
+      tags: [resources]
+      operationId: getResource
+      summary: Get a resource.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Resource'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [resources]
+      operationId: updateResource
+      summary: Update a resource (permission `calendar.resource.manage`).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourcePatch'
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Resource'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [resources]
+      operationId: deleteResource
+      summary: Delete a resource (future bookings are declined).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/calendar/resources/{id}/availability:
+    get:
+      tags: [resources]
+      operationId: getResourceAvailability
+      summary: Busy intervals of a resource in a window.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Availability.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceAvailability'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------------------- sync
+  /api/calendar/changes:
+    get:
+      tags: [sync]
+      operationId: getChanges
+      summary: Change log since a sequence number, for calendars the caller can read.
+      description: |
+        Oldest first, up to `limit`. When `hasMore`, call again with `since = cursor`. `since` older than the
+        30-day retention → `410 common.cursor_expired` (refetch visible ranges).
+      parameters:
+        - name: since
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 500
+      responses:
+        '200':
+          description: Delta.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '410':
+          $ref: '#/components/responses/CursorExpired'
+
+  /api/calendar/events:
+    get:
+      tags: [sync]
+      operationId: streamEvents
+      summary: Server-Sent Events change feed (calendar changes, reminders, session revocation).
+      description: |
+        `text/event-stream`, heartbeat every 25 s, resume with `Last-Event-ID`. Event types:
+        ```
+        id: <seq>
+        event: calendar
+        data: {"topic":"calendar","cursor":"812","calendarId":"…"}
+
+        event: reminder
+        data: {"topic":"reminder","cursor":"…","eventId":"…","instanceId":"…","fireAt":"2026-10-13T08:50:00Z"}
+
+        event: session
+        data: {"topic":"session","cursor":"0","reason":"revoked"}
+        ```
+        Data never carries event details; fetch them over REST (authorization stays in one place).
+      parameters:
+        - $ref: '#/components/parameters/LastEventId'
+        - name: access_token
+          in: query
+          description: Bearer token for clients that cannot send `Authorization` (EventSource).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE stream; each `data:` line is a `RealtimeNotification` JSON object.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  # ---------------------------------------------------------------- import
+  /api/calendar/import:
+    post:
+      tags: [import]
+      operationId: importIcs
+      summary: Import an `.ics` file (≤ 10 MB) into a calendar; runs as a job.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [calendarId, file]
+              properties:
+                calendarId:
+                  type: string
+                  format: uuid
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '202':
+          description: Import job queued; poll `GET /api/calendar/imports/{id}`.
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportJob'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+
+  /api/calendar/imports/{id}:
+    get:
+      tags: [import]
+      operationId: getImportJob
+      summary: Import progress and result report.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Import job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportJob'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------------------- settings
+  /api/calendar/settings:
+    get:
+      tags: [settings]
+      operationId: getSettings
+      summary: Calendar settings of the current user.
+      responses:
+        '200':
+          description: Settings.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CalendarSettings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      tags: [settings]
+      operationId: putSettings
+      summary: Replace calendar settings.
+      parameters:
+        - $ref: '#/components/parameters/IfMatchRequired'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CalendarSettingsInput'
+      responses:
+        '200':
+          description: Saved.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CalendarSettings'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: ES256 access token from Auth; `aud` must include `calendar`.
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque cursor from a previous page's `nextCursor`.
+      schema:
+        type: string
+        maxLength: 1024
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Scope:
+      name: scope
+      in: query
+      description: Required for recurring events; ignored for single events.
+      schema:
+        $ref: '#/components/schemas/EditScope'
+    Instance:
+      name: instance
+      in: query
+      description: Recurrence id (compact UTC `20261013T070000Z`, or `20261013` for all-day series). Required for `this` / `following`.
+      schema:
+        $ref: '#/components/schemas/RecurrenceId'
+    Notify:
+      name: notify
+      in: query
+      description: Send iTIP updates/cancellations to guests ("Send / Don't send").
+      schema:
+        type: boolean
+        default: true
+    IfMatch:
+      name: If-Match
+      in: header
+      description: '`"<version>"`; optional here, enforced when sent.'
+      schema:
+        type: string
+    IfMatchRequired:
+      name: If-Match
+      in: header
+      required: true
+      description: '`"<version>"` from the resource''s `ETag`.'
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: Client-generated unique key; replays return the first response for 24 h.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 255
+    LastEventId:
+      name: Last-Event-ID
+      in: header
+      schema:
+        type: string
+
+  headers:
+    ETag:
+      description: '`"<version>"` of the returned resource.'
+      schema:
+        type: string
+    Location:
+      description: URL of the created resource.
+      schema:
+        type: string
+    RetryAfter:
+      description: Seconds until retry.
+      schema:
+        type: integer
+
+  responses:
+    BadRequest:
+      description: Malformed request or validation failure (`common.validation_failed` with `fields`, or a `calendar.*` code).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Missing/invalid/expired token (`common.unauthenticated`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: Insufficient calendar access (`common.forbidden`, `calendar.event.read_only`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: Not found (also other tenants' ids / calendars without access).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: State conflict; see `code`.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PreconditionFailed:
+      description: Stale `If-Match` (`common.precondition_failed`) — reload the event.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PreconditionRequired:
+      description: '`If-Match` missing (`common.precondition_required`).'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    IdempotencyMismatch:
+      description: Same `Idempotency-Key` with a different body (`common.idempotency_key_reused`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PayloadTooLarge:
+      description: Too large (`calendar.import.too_large`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    CursorExpired:
+      description: '`since` older than retention (`common.cursor_expired`).'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    TooManyRequests:
+      description: Rate limited (`common.rate_limited`).
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+  schemas:
+    # ------------------------------------------------------------ common
+    Problem:
+      type: object
+      description: RFC 9457 problem details.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          description: Stable machine-readable code; see `ErrorCode`.
+          examples: [calendar.event.invalid_rrule]
+        fields:
+          type: object
+          description: 'Validation details: field name (JSON pointer for nested fields) to reason code.'
+          additionalProperties:
+            type: string
+        requestId:
+          type: string
+        retryAfterSeconds:
+          type: integer
+    ErrorCode:
+      type: string
+      description: Known `Problem.code` values for this service (common + calendar).
+      enum:
+        - common.invalid_json
+        - common.validation_failed
+        - common.unauthenticated
+        - common.forbidden
+        - common.not_found
+        - common.conflict
+        - common.precondition_failed
+        - common.precondition_required
+        - common.idempotency_key_required
+        - common.idempotency_key_reused
+        - common.rate_limited
+        - common.payload_too_large
+        - common.unsupported_media_type
+        - common.cursor_expired
+        - common.internal
+        - common.unavailable
+        - calendar.calendar.primary_undeletable
+        - calendar.calendar.invalid_time_zone
+        - calendar.event.invalid_time_range
+        - calendar.event.invalid_time_zone
+        - calendar.event.invalid_rrule
+        - calendar.event.rrule_frequency_not_allowed
+        - calendar.event.too_many_instances
+        - calendar.event.scope_required
+        - calendar.event.instance_required
+        - calendar.event.instance_not_found
+        - calendar.event.read_only
+        - calendar.event.not_organizer
+        - calendar.event.not_attendee
+        - calendar.instances.window_too_large
+        - calendar.room.conflict
+        - calendar.room.not_allowed
+        - calendar.room.max_duration_exceeded
+        - calendar.share.invalid_grantee
+        - calendar.share.owner_immutable
+        - calendar.find_time.window_too_large
+        - calendar.import.too_large
+        - calendar.import.invalid_ics
+    Page:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        nextCursor:
+          type: [string, 'null']
+    Timestamp:
+      type: string
+      format: date-time
+      description: RFC 3339, UTC.
+    TimeZone:
+      type: string
+      description: IANA time zone name.
+      examples: [Europe/Berlin]
+    RecurrenceId:
+      type: string
+      description: Original start of an instance — compact UTC (`20261013T070000Z`) or date (`20261013`) for all-day series.
+      pattern: '^[0-9]{8}(T[0-9]{6}Z)?$'
+    EditScope:
+      type: string
+      enum: [this, following, all]
+    RealtimeNotification:
+      type: object
+      description: SSE payload — "something changed" + cursor, never event data.
+      required: [topic, cursor]
+      properties:
+        topic:
+          type: string
+          enum: [calendar, reminder, session]
+        cursor:
+          type: string
+          description: Change-log sequence (decimal string) for `calendar`.
+        calendarId:
+          type: string
+          format: uuid
+        eventId:
+          type: string
+          format: uuid
+          description: For `reminder`.
+        instanceId:
+          type: string
+          description: For `reminder`.
+        fireAt:
+          $ref: '#/components/schemas/Timestamp'
+        reason:
+          type: string
+          description: For `session` (`revoked`).
+
+    # ------------------------------------------------------------ calendars
+    AccessRole:
+      type: string
+      description: Caller's effective access (`owner` > `manager` > `writer` > `reader` > `free_busy`).
+      enum: [owner, manager, writer, reader, free_busy]
+    CalendarKind:
+      type: string
+      enum: [primary, secondary, resource]
+    CalendarColor:
+      type: string
+      description: Pastel palette key from the design system.
+      enum: [lilac, sky, mint, lime, sun, peach, rose, sand, slate, forest]
+    ReminderMethod:
+      type: string
+      enum: [popup, email]
+    Reminder:
+      type: object
+      required: [method, minutesBefore]
+      properties:
+        method:
+          $ref: '#/components/schemas/ReminderMethod'
+        minutesBefore:
+          type: integer
+          minimum: 0
+          maximum: 40320
+    Calendar:
+      type: object
+      required: [id, ownerType, ownerId, name, color, timeZone, kind, defaultReminders, accessRole, isPublicFeedEnabled, countsForAvailability, hidden, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ownerType:
+          type: string
+          enum: [user, resource]
+        ownerId:
+          type: string
+          format: uuid
+        ownerName:
+          type: string
+          description: Display name of the owner (for shared calendars).
+        ownerEmail:
+          type: [string, 'null']
+        name:
+          type: string
+        color:
+          $ref: '#/components/schemas/CalendarColor'
+        timeZone:
+          $ref: '#/components/schemas/TimeZone'
+        kind:
+          $ref: '#/components/schemas/CalendarKind'
+        defaultReminders:
+          type: array
+          items:
+            $ref: '#/components/schemas/Reminder'
+        accessRole:
+          $ref: '#/components/schemas/AccessRole'
+        isPublicFeedEnabled:
+          type: boolean
+        countsForAvailability:
+          type: boolean
+          description: Per-viewer — whether this calendar's events make the user busy in free/busy.
+        hidden:
+          type: boolean
+          description: Per-viewer — unchecked in the sidebar by default.
+        version:
+          type: integer
+    CalendarList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Calendar'
+    CalendarInput:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        color:
+          $ref: '#/components/schemas/CalendarColor'
+        timeZone:
+          $ref: '#/components/schemas/TimeZone'
+        defaultReminders:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/Reminder'
+    CalendarPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        color:
+          $ref: '#/components/schemas/CalendarColor'
+        timeZone:
+          $ref: '#/components/schemas/TimeZone'
+        defaultReminders:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/Reminder'
+        isPublicFeedEnabled:
+          type: boolean
+          description: Set false to disable the private iCal feed (enable via `:rotateFeedToken`).
+        countsForAvailability:
+          type: boolean
+        hidden:
+          type: boolean
+    FeedToken:
+      type: object
+      required: [feedUrl]
+      properties:
+        feedUrl:
+          type: string
+          description: '`https://<host>/ical/<calendarId>/<token>.ics`.'
+    GranteeType:
+      type: string
+      enum: [user, group, org, public]
+    ShareRole:
+      type: string
+      enum: [free_busy, reader, writer, manager]
+    Share:
+      type: object
+      required: [granteeType, role]
+      properties:
+        granteeType:
+          $ref: '#/components/schemas/GranteeType'
+        granteeId:
+          type: [string, 'null']
+          format: uuid
+          description: Null for `org` and `public`.
+        role:
+          $ref: '#/components/schemas/ShareRole'
+        granteeName:
+          type: [string, 'null']
+        granteeEmail:
+          type: [string, 'null']
+    ShareInput:
+      type: object
+      required: [granteeType, role]
+      additionalProperties: false
+      properties:
+        granteeType:
+          $ref: '#/components/schemas/GranteeType'
+        granteeId:
+          type: string
+          format: uuid
+        granteeEmail:
+          type: string
+          format: email
+          description: Alternative to `granteeId` for users/groups (resolved via the directory).
+        role:
+          $ref: '#/components/schemas/ShareRole'
+    ShareList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Share'
+    ShareListInput:
+      type: object
+      required: [items]
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/ShareInput'
+
+    # ------------------------------------------------------------ events
+    EventDateTime:
+      type: object
+      description: |
+        Timed → `dateTime` (local wall time, **no offset**) + `timeZone`.
+        All-day → `date` only (`end.date` exclusive).
+      properties:
+        dateTime:
+          type: string
+          pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?$'
+          examples: ['2026-10-13T09:00:00']
+        timeZone:
+          $ref: '#/components/schemas/TimeZone'
+        date:
+          type: string
+          format: date
+    EventStatus:
+      type: string
+      enum: [confirmed, tentative, cancelled]
+    Transparency:
+      type: string
+      enum: [opaque, transparent]
+    Visibility:
+      type: string
+      enum: [default, public, private]
+    PartStat:
+      type: string
+      enum: [needs-action, accepted, declined, tentative, delegated]
+    AttendeeRole:
+      type: string
+      description: '`req` = required, `opt` = optional, `chair`.'
+      enum: [req, opt, chair]
+    Organizer:
+      type: object
+      required: [address, self]
+      properties:
+        address:
+          type: string
+        name:
+          type: [string, 'null']
+        userId:
+          type: [string, 'null']
+          format: uuid
+          description: Set when the organizer is internal.
+        timeZone:
+          type: [string, 'null']
+          description: Organizer's time zone (shown when it differs from the viewer's).
+        self:
+          type: boolean
+    Attendee:
+      type: object
+      required: [address, role, partstat, rsvp, isResource, internal, self]
+      properties:
+        address:
+          type: string
+        userId:
+          type: [string, 'null']
+          format: uuid
+        resourceId:
+          type: [string, 'null']
+          format: uuid
+        displayName:
+          type: [string, 'null']
+        role:
+          $ref: '#/components/schemas/AttendeeRole'
+        partstat:
+          $ref: '#/components/schemas/PartStat'
+        rsvp:
+          type: boolean
+        isResource:
+          type: boolean
+        internal:
+          type: boolean
+        self:
+          type: boolean
+        comment:
+          type: [string, 'null']
+        respondedAt:
+          type: [string, 'null']
+          format: date-time
+    AttendeeInput:
+      type: object
+      additionalProperties: false
+      description: Person or group by `address`, or a room by `resourceId`. Groups are expanded at invite time.
+      properties:
+        address:
+          type: string
+          format: email
+        resourceId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        role:
+          $ref: '#/components/schemas/AttendeeRole'
+        rsvp:
+          type: boolean
+          default: true
+    GuestPermissions:
+      type: object
+      required: [canModify, canInviteOthers, canSeeGuests]
+      properties:
+        canModify:
+          type: boolean
+          default: false
+        canInviteOthers:
+          type: boolean
+          default: true
+        canSeeGuests:
+          type: boolean
+          default: true
+    EventReminders:
+      type: object
+      required: [useDefault, overrides]
+      description: The caller's own reminders for this event (per user).
+      properties:
+        useDefault:
+          type: boolean
+          description: Use the calendar's default reminders.
+        overrides:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/Reminder'
+    EventOverride:
+      type: object
+      description: Exception to one instance of a series. Null/absent fields inherit from the master.
+      required: [recurrenceId, status]
+      properties:
+        recurrenceId:
+          $ref: '#/components/schemas/RecurrenceId'
+        status:
+          $ref: '#/components/schemas/EventStatus'
+          description: '`cancelled` = deleted instance.'
+        start:
+          oneOf:
+            - $ref: '#/components/schemas/EventDateTime'
+            - type: 'null'
+        end:
+          oneOf:
+            - $ref: '#/components/schemas/EventDateTime'
+            - type: 'null'
+        summary:
+          type: [string, 'null']
+        description:
+          type: [string, 'null']
+        location:
+          type: [string, 'null']
+        conferenceUrl:
+          type: [string, 'null']
+        color:
+          oneOf:
+            - $ref: '#/components/schemas/CalendarColor'
+            - type: 'null'
+        transparency:
+          oneOf:
+            - $ref: '#/components/schemas/Transparency'
+            - type: 'null'
+        selfPartstat:
+          oneOf:
+            - $ref: '#/components/schemas/PartStat'
+            - type: 'null'
+          description: Instance-specific reply of the caller.
+    Event:
+      type: object
+      required: [id, calendarId, icalUid, allDay, start, end, status, transparency, visibility, organizer, attendees, reminders, rdates, exdates, overrides, sequence, isOrganizerCopy, accessRole, canEdit, guestPermissions, createdAt, updatedAt, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+        calendarId:
+          type: string
+          format: uuid
+        icalUid:
+          type: string
+        summary:
+          type: [string, 'null']
+        description:
+          type: [string, 'null']
+          description: Plain text or a sanitized HTML subset (from the rich-text editor).
+        location:
+          type: [string, 'null']
+        conferenceUrl:
+          type: [string, 'null']
+        color:
+          oneOf:
+            - $ref: '#/components/schemas/CalendarColor'
+            - type: 'null'
+          description: Event-specific color; null = calendar color.
+        allDay:
+          type: boolean
+        start:
+          $ref: '#/components/schemas/EventDateTime'
+        end:
+          $ref: '#/components/schemas/EventDateTime'
+        startUtc:
+          type: [string, 'null']
+          format: date-time
+          description: Derived; first instance start for series. Null for all-day.
+        endUtc:
+          type: [string, 'null']
+          format: date-time
+        rrule:
+          type: [string, 'null']
+          description: RFC 5545 RRULE value (series master only).
+        rdates:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecurrenceId'
+        exdates:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecurrenceId'
+        seriesEndUtc:
+          type: [string, 'null']
+          format: date-time
+          description: Derived last instance end; null = infinite or not recurring.
+        status:
+          $ref: '#/components/schemas/EventStatus'
+        transparency:
+          $ref: '#/components/schemas/Transparency'
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        organizer:
+          $ref: '#/components/schemas/Organizer'
+        attendees:
+          type: array
+          description: Empty when `guestPermissions.canSeeGuests` is false for a non-organizer.
+          items:
+            $ref: '#/components/schemas/Attendee'
+        selfPartstat:
+          oneOf:
+            - $ref: '#/components/schemas/PartStat'
+            - type: 'null'
+          description: The caller's reply when they are an attendee.
+        reminders:
+          $ref: '#/components/schemas/EventReminders'
+        overrides:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventOverride'
+        sequence:
+          type: integer
+        isOrganizerCopy:
+          type: boolean
+        organizerEventId:
+          type: [string, 'null']
+          format: uuid
+        guestPermissions:
+          $ref: '#/components/schemas/GuestPermissions'
+        accessRole:
+          $ref: '#/components/schemas/AccessRole'
+        canEdit:
+          type: boolean
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+        version:
+          type: integer
+    EventInput:
+      type: object
+      required: [start, end]
+      additionalProperties: false
+      properties:
+        summary:
+          type: string
+          maxLength: 1000
+        description:
+          type: string
+          maxLength: 100000
+        location:
+          type: string
+          maxLength: 1000
+        conferenceUrl:
+          type: string
+          maxLength: 2048
+        color:
+          $ref: '#/components/schemas/CalendarColor'
+        allDay:
+          type: boolean
+          default: false
+        start:
+          $ref: '#/components/schemas/EventDateTime'
+        end:
+          $ref: '#/components/schemas/EventDateTime'
+        rrule:
+          type: string
+          maxLength: 1000
+        rdates:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecurrenceId'
+        exdates:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecurrenceId'
+        status:
+          $ref: '#/components/schemas/EventStatus'
+        transparency:
+          $ref: '#/components/schemas/Transparency'
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        attendees:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/AttendeeInput'
+        reminders:
+          $ref: '#/components/schemas/EventReminders'
+        guestPermissions:
+          $ref: '#/components/schemas/GuestPermissions'
+        notify:
+          type: boolean
+          default: true
+          description: Send invitations to attendees.
+    EventPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: Merge-patch — omitted fields unchanged, `null` clears. `attendees` replaces the full list.
+      properties:
+        summary:
+          type: [string, 'null']
+          maxLength: 1000
+        description:
+          type: [string, 'null']
+          maxLength: 100000
+        location:
+          type: [string, 'null']
+          maxLength: 1000
+        conferenceUrl:
+          type: [string, 'null']
+          maxLength: 2048
+        color:
+          oneOf:
+            - $ref: '#/components/schemas/CalendarColor'
+            - type: 'null'
+        allDay:
+          type: boolean
+        start:
+          $ref: '#/components/schemas/EventDateTime'
+        end:
+          $ref: '#/components/schemas/EventDateTime'
+        rrule:
+          type: [string, 'null']
+          maxLength: 1000
+        rdates:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecurrenceId'
+        exdates:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecurrenceId'
+        status:
+          $ref: '#/components/schemas/EventStatus'
+        transparency:
+          $ref: '#/components/schemas/Transparency'
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        attendees:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/AttendeeInput'
+        reminders:
+          $ref: '#/components/schemas/EventReminders'
+        guestPermissions:
+          $ref: '#/components/schemas/GuestPermissions'
+        calendarId:
+          type: string
+          format: uuid
+          description: Move the event to another calendar the caller can write (scope `all` only).
+    TimeInterval:
+      type: object
+      required: [start, end]
+      properties:
+        start:
+          $ref: '#/components/schemas/Timestamp'
+        end:
+          $ref: '#/components/schemas/Timestamp'
+    RoomBookingResult:
+      type: object
+      required: [resourceId, status, conflicts, declinedInstances]
+      properties:
+        resourceId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [accepted, declined, needs-action]
+          description: '`needs-action` for `manual` booking policy.'
+        reason:
+          type: [string, 'null']
+          enum: [conflict, not_allowed, max_duration_exceeded, null]
+        conflicts:
+          type: array
+          description: Conflicting busy intervals (when declined).
+          items:
+            $ref: '#/components/schemas/TimeInterval'
+        declinedInstances:
+          type: array
+          description: For recurring bookings with partial conflicts — instances declined by the room.
+          items:
+            $ref: '#/components/schemas/RecurrenceId'
+    EventMutationResult:
+      type: object
+      required: [event, roomBookings, droppedOverrides]
+      properties:
+        event:
+          $ref: '#/components/schemas/Event'
+        previousSeries:
+          oneOf:
+            - $ref: '#/components/schemas/Event'
+            - type: 'null'
+          description: For `scope=following` — the original series, truncated with UNTIL.
+        roomBookings:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoomBookingResult'
+        droppedOverrides:
+          type: array
+          description: Exceptions whose recurrence-id no longer exists after a series time change.
+          items:
+            $ref: '#/components/schemas/RecurrenceId'
+    RespondRequest:
+      type: object
+      required: [partstat]
+      additionalProperties: false
+      properties:
+        partstat:
+          type: string
+          enum: [accepted, declined, tentative]
+        instance:
+          $ref: '#/components/schemas/RecurrenceId'
+          description: Respond to one instance only; omit for the whole series.
+        comment:
+          type: string
+          maxLength: 1000
+        notify:
+          type: boolean
+          default: true
+          description: Send the REPLY to the organizer.
+
+    # ------------------------------------------------------------ instances
+    InstanceAccessLevel:
+      type: string
+      description: '`busy` = only times are visible (free/busy share or private event).'
+      enum: [full, busy]
+    EventInstance:
+      type: object
+      required: [id, eventId, calendarId, allDay, status, transparency, accessLevel, isRecurring, isException, canEdit, hasAttendees, reminders]
+      properties:
+        id:
+          type: string
+          description: '`<eventId>_<recurrenceId>`, or `<eventId>` for single events.'
+        eventId:
+          type: string
+          format: uuid
+        calendarId:
+          type: string
+          format: uuid
+        recurrenceId:
+          oneOf:
+            - $ref: '#/components/schemas/RecurrenceId'
+            - type: 'null'
+        icalUid:
+          type: [string, 'null']
+        allDay:
+          type: boolean
+        startUtc:
+          type: [string, 'null']
+          format: date-time
+          description: Timed events.
+        endUtc:
+          type: [string, 'null']
+          format: date-time
+        startDate:
+          type: [string, 'null']
+          format: date
+          description: All-day events.
+        endDate:
+          type: [string, 'null']
+          format: date
+          description: Exclusive.
+        timeZone:
+          type: [string, 'null']
+          description: The event's own time zone (globe icon when it differs from the viewer's).
+        summary:
+          type: [string, 'null']
+          description: Absent for `accessLevel = busy`.
+        location:
+          type: [string, 'null']
+        conferenceUrl:
+          type: [string, 'null']
+        color:
+          oneOf:
+            - $ref: '#/components/schemas/CalendarColor'
+            - type: 'null'
+        status:
+          $ref: '#/components/schemas/EventStatus'
+        transparency:
+          $ref: '#/components/schemas/Transparency'
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+        accessLevel:
+          $ref: '#/components/schemas/InstanceAccessLevel'
+        isRecurring:
+          type: boolean
+        isException:
+          type: boolean
+        rrule:
+          type: [string, 'null']
+          description: The series rule (for "Weekly on Tue" text in popovers).
+        organizer:
+          oneOf:
+            - $ref: '#/components/schemas/Organizer'
+            - type: 'null'
+        selfPartstat:
+          oneOf:
+            - $ref: '#/components/schemas/PartStat'
+            - type: 'null'
+        hasAttendees:
+          type: boolean
+        attendeeCounts:
+          oneOf:
+            - $ref: '#/components/schemas/AttendeeCounts'
+            - type: 'null'
+        canEdit:
+          type: boolean
+        reminders:
+          type: array
+          description: The viewer's effective reminders for this instance.
+          items:
+            $ref: '#/components/schemas/Reminder'
+        version:
+          type: integer
+          description: Master version (send as `If-Match` when editing from the grid).
+    AttendeeCounts:
+      type: object
+      required: [total, accepted, declined, tentative, needsAction]
+      properties:
+        total:
+          type: integer
+        accepted:
+          type: integer
+        declined:
+          type: integer
+        tentative:
+          type: integer
+        needsAction:
+          type: integer
+    InstanceList:
+      type: object
+      required: [items, truncated]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventInstance'
+        truncated:
+          type: boolean
+          description: True if a series hit the 1000-instance guard.
+        inaccessibleCalendarIds:
+          type: array
+          description: Requested calendars the caller can't read (ignored).
+          items:
+            type: string
+            format: uuid
+    InstancePage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/EventInstance'
+
+    # ------------------------------------------------------------ availability
+    FreeBusyRequest:
+      type: object
+      required: [from, to]
+      additionalProperties: false
+      description: At least one of `userIds` / `addresses`. Window ≤ 62 days.
+      properties:
+        userIds:
+          type: array
+          maxItems: 100
+          items:
+            type: string
+            format: uuid
+        addresses:
+          type: array
+          maxItems: 100
+          items:
+            type: string
+            format: email
+        from:
+          $ref: '#/components/schemas/Timestamp'
+        to:
+          $ref: '#/components/schemas/Timestamp'
+    BusyInterval:
+      type: object
+      required: [start, end, status]
+      properties:
+        start:
+          $ref: '#/components/schemas/Timestamp'
+        end:
+          $ref: '#/components/schemas/Timestamp'
+        status:
+          type: string
+          enum: [busy, tentative]
+    FreeBusyEntry:
+      type: object
+      required: [busy]
+      properties:
+        userId:
+          type: [string, 'null']
+          format: uuid
+        address:
+          type: [string, 'null']
+        busy:
+          type: array
+          items:
+            $ref: '#/components/schemas/BusyInterval'
+        workingHours:
+          oneOf:
+            - $ref: '#/components/schemas/WorkingHours'
+            - type: 'null'
+        error:
+          type: [string, 'null']
+          description: Why no data is available for this person.
+          enum: [not_found, forbidden, external, null]
+    FreeBusyResponse:
+      type: object
+      required: [from, to, items]
+      properties:
+        from:
+          $ref: '#/components/schemas/Timestamp'
+        to:
+          $ref: '#/components/schemas/Timestamp'
+        items:
+          type: array
+          description: Same order as requested (userIds first, then addresses).
+          items:
+            $ref: '#/components/schemas/FreeBusyEntry'
+    FindTimeAttendee:
+      type: object
+      required: [address]
+      additionalProperties: false
+      properties:
+        address:
+          type: string
+          format: email
+        optional:
+          type: boolean
+          default: false
+    FindTimeRequest:
+      type: object
+      required: [attendees, durationMinutes, window]
+      additionalProperties: false
+      properties:
+        attendees:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/FindTimeAttendee'
+        durationMinutes:
+          type: integer
+          minimum: 5
+          maximum: 1440
+        window:
+          $ref: '#/components/schemas/TimeInterval'
+          description: Search window, ≤ 62 days.
+        timeZone:
+          $ref: '#/components/schemas/TimeZone'
+        workingHoursOnly:
+          type: boolean
+          default: true
+        granularityMinutes:
+          type: integer
+          enum: [5, 10, 15, 30, 60]
+          default: 15
+        room:
+          type: object
+          additionalProperties: false
+          description: When set, each slot lists rooms that are free and satisfy the constraints.
+          properties:
+            minCapacity:
+              type: integer
+              minimum: 1
+            features:
+              type: array
+              items:
+                type: string
+            building:
+              type: string
+        maxResults:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 5
+    ResourceSummary:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        building:
+          type: [string, 'null']
+        floor:
+          type: [string, 'null']
+        capacity:
+          type: [integer, 'null']
+    FindTimeSlot:
+      type: object
+      required: [start, end, conflicts, availableRooms]
+      properties:
+        start:
+          $ref: '#/components/schemas/Timestamp'
+        end:
+          $ref: '#/components/schemas/Timestamp'
+        conflicts:
+          type: array
+          description: Attendees (optional ones only, unless no slot fits everyone) busy at that time.
+          items:
+            $ref: '#/components/schemas/FindTimeAttendee'
+        availableRooms:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceSummary'
+    FindTimeResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/FindTimeSlot'
+        unknownAttendees:
+          type: array
+          description: External or unknown addresses whose availability could not be checked.
+          items:
+            type: string
+
+    # ------------------------------------------------------------ resources
+    BookingPolicy:
+      type: string
+      enum: [auto_accept, manual, restricted_to_groups]
+    Resource:
+      type: object
+      required: [id, name, features, bookingPolicy, calendarId]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        address:
+          type: [string, 'null']
+          description: Attendee address used in iCalendar for this resource.
+        building:
+          type: [string, 'null']
+        floor:
+          type: [string, 'null']
+        capacity:
+          type: [integer, 'null']
+        features:
+          type: array
+          items:
+            type: string
+          examples: [[projector, video_conference, whiteboard]]
+        bookingPolicy:
+          $ref: '#/components/schemas/BookingPolicy'
+        allowedGroupIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        maxDurationMinutes:
+          type: [integer, 'null']
+        calendarId:
+          type: string
+          format: uuid
+    ResourcePage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/Resource'
+    ResourceInput:
+      type: object
+      required: [name, bookingPolicy]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        building:
+          type: string
+          maxLength: 200
+        floor:
+          type: string
+          maxLength: 50
+        capacity:
+          type: integer
+          minimum: 1
+        features:
+          type: array
+          items:
+            type: string
+        bookingPolicy:
+          $ref: '#/components/schemas/BookingPolicy'
+        allowedGroupIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        maxDurationMinutes:
+          type: integer
+          minimum: 5
+        timeZone:
+          $ref: '#/components/schemas/TimeZone'
+    ResourcePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        building:
+          type: [string, 'null']
+        floor:
+          type: [string, 'null']
+        capacity:
+          type: [integer, 'null']
+          minimum: 1
+        features:
+          type: array
+          items:
+            type: string
+        bookingPolicy:
+          $ref: '#/components/schemas/BookingPolicy'
+        allowedGroupIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        maxDurationMinutes:
+          type: [integer, 'null']
+          minimum: 5
+    ResourceAvailability:
+      type: object
+      required: [resourceId, from, to, busy]
+      properties:
+        resourceId:
+          type: string
+          format: uuid
+        from:
+          $ref: '#/components/schemas/Timestamp'
+        to:
+          $ref: '#/components/schemas/Timestamp'
+        busy:
+          type: array
+          items:
+            $ref: '#/components/schemas/BusyInterval'
+
+    # ------------------------------------------------------------ sync
+    ChangeOp:
+      type: string
+      enum: [created, updated, deleted]
+    CalendarChange:
+      type: object
+      required: [seq, calendarId, icalUid, op, changedAt]
+      properties:
+        seq:
+          type: string
+          description: Sequence (decimal string; int64).
+        calendarId:
+          type: string
+          format: uuid
+        icalUid:
+          type: string
+        eventId:
+          type: [string, 'null']
+          format: uuid
+        op:
+          $ref: '#/components/schemas/ChangeOp'
+        changedAt:
+          $ref: '#/components/schemas/Timestamp'
+    ChangesResponse:
+      type: object
+      required: [since, cursor, hasMore, changes, calendarsChanged]
+      properties:
+        since:
+          type: string
+        cursor:
+          type: string
+          description: Pass as `since` next time.
+        hasMore:
+          type: boolean
+        changes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CalendarChange'
+        calendarsChanged:
+          type: boolean
+          description: Calendar list/ACL changed; refetch `GET /calendars`.
+
+    # ------------------------------------------------------------ import
+    ImportJob:
+      type: object
+      required: [id, calendarId, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        calendarId:
+          type: string
+          format: uuid
+        filename:
+          type: [string, 'null']
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+        progress:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 1
+        report:
+          oneOf:
+            - $ref: '#/components/schemas/ImportReport'
+            - type: 'null'
+        error:
+          type: [string, 'null']
+          description: Problem code when `failed` (e.g. `calendar.import.invalid_ics`).
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+    ImportReport:
+      type: object
+      required: [created, updated, skipped, errors]
+      properties:
+        created:
+          type: integer
+        updated:
+          type: integer
+        skipped:
+          type: integer
+        errors:
+          type: array
+          items:
+            type: object
+            required: [reason]
+            properties:
+              icalUid:
+                type: [string, 'null']
+              summary:
+                type: [string, 'null']
+              line:
+                type: [integer, 'null']
+              reason:
+                type: string
+                description: Reason code, e.g. `invalid_rrule`, `stale_sequence`, `unsupported_component`.
+
+    # ------------------------------------------------------------ settings
+    TimeOfDay:
+      type: string
+      pattern: '^([01][0-9]|2[0-4]):[0-5][0-9]$'
+      examples: ['09:00']
+    WorkingHours:
+      type: object
+      required: [timeZone, days]
+      properties:
+        timeZone:
+          $ref: '#/components/schemas/TimeZone'
+        days:
+          type: array
+          description: One entry per ISO weekday that has working hours (1 = Monday … 7 = Sunday).
+          items:
+            type: object
+            required: [day, ranges]
+            properties:
+              day:
+                type: integer
+                minimum: 1
+                maximum: 7
+              ranges:
+                type: array
+                items:
+                  type: object
+                  required: [start, end]
+                  properties:
+                    start:
+                      $ref: '#/components/schemas/TimeOfDay'
+                    end:
+                      $ref: '#/components/schemas/TimeOfDay'
+    CalendarView:
+      type: string
+      enum: [day, four_day, week, month, schedule, year]
+    CalendarSettingsInput:
+      type: object
+      required: [workingHours, weekStart, defaultDurationMinutes, showDeclined, showWeekends, keyboardShortcuts, desktopNotifications, defaultView]
+      additionalProperties: false
+      properties:
+        timeZone:
+          type: [string, 'null']
+          description: Override of the profile time zone for the calendar UI (null = use profile).
+        secondaryTimeZone:
+          type: [string, 'null']
+        workingHours:
+          $ref: '#/components/schemas/WorkingHours'
+        weekStart:
+          type: integer
+          minimum: 1
+          maximum: 7
+          description: ISO weekday (1 = Monday, 7 = Sunday).
+        defaultDurationMinutes:
+          type: integer
+          enum: [15, 30, 45, 60, 90, 120]
+        defaultReminders:
+          type: array
+          maxItems: 5
+          description: Default for the primary calendar.
+          items:
+            $ref: '#/components/schemas/Reminder'
+        showDeclined:
+          type: boolean
+        showWeekends:
+          type: boolean
+        keyboardShortcuts:
+          type: boolean
+        desktopNotifications:
+          type: boolean
+        defaultView:
+          $ref: '#/components/schemas/CalendarView'
+    CalendarSettings:
+      allOf:
+        - $ref: '#/components/schemas/CalendarSettingsInput'
+        - type: object
+          required: [version, caldavUrl]
+          properties:
+            version:
+              type: integer
+            caldavUrl:
+              type: string
+              description: CalDAV principal URL for "Calendar apps".

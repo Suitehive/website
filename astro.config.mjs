@@ -68,9 +68,10 @@ export default defineConfig({
       },
       plugins: [
         starlightOpenAPI([
-          { base: 'docs/api/auth', schema: '../contracts/openapi/auth.yaml', sidebar: { label: 'Auth API' } },
-          { base: 'docs/api/mail', schema: '../contracts/openapi/mail.yaml', sidebar: { label: 'Mail API' } },
-          { base: 'docs/api/calendar', schema: '../contracts/openapi/calendar.yaml', sidebar: { label: 'Calendar API' } },
+          { base: 'docs/api/auth', schema: './openapi/auth.yaml', sidebar: { label: 'Auth API' } },
+          { base: 'docs/api/mail', schema: './openapi/mail.yaml', sidebar: { label: 'Mail API' } },
+          { base: 'docs/api/calendar', schema: './openapi/calendar.yaml', sidebar: { label: 'Calendar API' } },
+          { base: 'docs/api/projects', schema: './openapi/projects.yaml', sidebar: { label: 'Projects API' } },
         ]),
         starlightLinksValidator({ errorOnRelativeLinks: true, errorOnLocalLinks: false, exclude: ['/', '/docs/api/**', '/features/**', '/self-hosting', '/self-hosting/', '/roadmap', '/roadmap/', '/about', '/about/'] }),
       ],

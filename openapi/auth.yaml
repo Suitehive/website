@@ -1,0 +1,4673 @@
+openapi: 3.1.0
+info:
+  title: Suitehive Auth API
+  version: 0.1.0
+  license:
+    name: AGPL-3.0-or-later
+    identifier: AGPL-3.0-or-later
+  description: |
+    Public REST API of the **Auth** service (identity, sessions, My account, admin console, OIDC).
+    Source of truth: `docs/design/03-lld-auth.md` §9.
+
+    ## Conventions (apply to every operation)
+    - JSON bodies, `camelCase` fields; timestamps are RFC 3339 in **UTC** (`2026-10-13T09:00:00Z`).
+    - IDs are UUIDv7 strings.
+    - Cursor pagination: `?limit=50&cursor=<opaque>` → `{ "items": [...], "nextCursor": "<opaque>" | null }`.
+      `nextCursor` is `null` on the last page. Cursors are opaque; never parse them.
+    - Errors are RFC 9457 `application/problem+json` with a stable `code` (see `ErrorCode`) and,
+      for validation errors, `fields` (`{ "<jsonField>": "<reason code>" }`).
+    - Optimistic concurrency: mutable resources return `ETag: "<version>"`; updates send `If-Match`.
+      A stale `If-Match` → `412 common.precondition_failed`. Where `If-Match` is required and missing → `428`.
+    - Mutating `POST`s accept an optional `Idempotency-Key` (24 h). Same key + different body → `422`.
+    - Authentication:
+      * Browser pages on the Auth origin use the HttpOnly session cookie `__Host-sh_session` **plus** the
+        `X-CSRF` header (double-submit: its value must equal the readable cookie `__Host-sh_csrf`, which
+        Auth sets on every page load and on `GET /api/auth/csrf`). The `Origin` header must be same-origin.
+      * First-party SPAs (mail, calendar, admin) obtain a 10-minute access token from
+        `POST /api/auth/session/token` and call APIs with `Authorization: Bearer <jwt>`.
+    - Step-up: write operations on security settings may fail with `403 auth.step_up_required`;
+      the client starts a challenge with `POST /api/auth/step-up`, completes it with `POST /api/auth/mfa`,
+      then retries the original request.
+servers:
+  - url: /
+    description: Same origin as the gateway (paths are absolute).
+tags:
+  - name: session
+    description: Login, MFA, logout, password reset, token handler.
+  - name: onboarding
+    description: First-run setup and invitation acceptance.
+  - name: account
+    description: My account (self-service).
+  - name: admin-users
+    description: Admin console — users, lifecycle, aliases.
+  - name: admin-domains
+    description: Admin console — domains and verification.
+  - name: admin-groups
+    description: Admin console — groups and members.
+  - name: admin-roles
+    description: Admin console — roles, assignments, permission catalog.
+  - name: admin-org
+    description: Admin console — organization, policies, installed services.
+  - name: admin-idps
+    description: Admin console — external identity providers (federated login).
+  - name: admin-audit
+    description: Admin console — org-wide audit log.
+  - name: oidc
+    description: OpenID Connect provider endpoints (standard protocol shapes).
+security:
+  - bearerAuth: []
+  - sessionCookie: []
+    csrfHeader: []
+
+paths:
+  # ---------------------------------------------------------------- session
+  /api/auth/csrf:
+    get:
+      tags: [session]
+      operationId: getCsrfToken
+      summary: Issue (or refresh) the double-submit CSRF cookie and return its value.
+      security: []
+      responses:
+        '200':
+          description: CSRF token. Also set as cookie `__Host-sh_csrf`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CsrfToken'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/auth/discovery:
+    get:
+      tags: [session]
+      operationId: discoverLogin
+      summary: Login options for an email's domain (org branding + external IdP buttons).
+      description: |
+        Never reveals whether a user exists. Unknown domains return an empty `idps` list and no branding.
+      security: []
+      parameters:
+        - name: email
+          in: query
+          required: true
+          schema:
+            type: string
+            format: email
+            maxLength: 320
+      responses:
+        '200':
+          description: Login options.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginDiscovery'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/auth/idp/{id}/start:
+    get:
+      tags: [session]
+      operationId: startFederatedLogin
+      summary: Start a federated login at an external IdP (browser navigation). Redirects.
+      description: |
+        The `startUrl` of a `LoginDiscovery` button. Sets a short-lived, sealed, HttpOnly flow cookie
+        (`__Host-sh_idp`, SameSite=Lax) that binds the callback to this browser, then redirects to the IdP's
+        authorization endpoint (code flow, PKCE S256, nonce). A disabled, unknown or policy-disallowed provider
+        redirects to `/login?error=idp_unavailable`. Too many attempts from one IP → `429`.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: return_to
+          in: query
+          description: Same-origin path to land on after sign-in.
+          schema:
+            type: string
+            maxLength: 2048
+        - name: login_hint
+          in: query
+          description: Passed to the IdP.
+          schema:
+            type: string
+            maxLength: 320
+      responses:
+        '302':
+          description: Redirect to the IdP, or back to the login page with `?error=`.
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/auth/idp/callback:
+    get:
+      tags: [session]
+      operationId: completeFederatedLogin
+      summary: Redirect URI registered at every IdP (`<public URL>/api/auth/idp/callback`). Redirects.
+      description: |
+        Verifies the flow cookie and `state`, redeems the code, verifies the ID token, then signs in the
+        **existing** user whose address equals the IdP's *verified* email on one of the provider org's
+        *verified* domains (LLD §7.8). No accounts are created (no JIT). Organization owners always sign in
+        with their password. Success sets the session cookie and redirects to `return_to` (default `/`);
+        any failure redirects to `/login?error=idp_failed` without saying why (reasons go to the audit log).
+      security: []
+      parameters:
+        - name: code
+          in: query
+          schema:
+            type: string
+        - name: state
+          in: query
+          schema:
+            type: string
+        - name: error
+          in: query
+          description: Set by the IdP when the user or the IdP refused.
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Signed in (redirect to `return_to`) or refused (redirect to the login page).
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+            Set-Cookie:
+              $ref: '#/components/headers/SetSessionCookie'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/auth/login:
+    post:
+      tags: [session]
+      operationId: login
+      summary: Password step of the login flow.
+      description: |
+        On `authenticated` the session cookie is set. On `mfa_required` the client continues with
+        `POST /api/auth/mfa`. Every failure (unknown user, wrong password, suspended, locked) returns the same
+        `401 auth.login.failed` body. `429` is returned only for the per-IP limit.
+      security:
+        - csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login step result.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SetSessionCookie'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/auth/mfa:
+    post:
+      tags: [session]
+      operationId: completeMfa
+      summary: Complete an MFA challenge (login second factor or step-up).
+      security:
+        - csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MfaCompleteRequest'
+      responses:
+        '200':
+          description: Challenge satisfied. For login challenges the session cookie is set.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SetSessionCookie'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/auth/step-up:
+    post:
+      tags: [session]
+      operationId: startStepUp
+      summary: Start a step-up MFA challenge for the current session.
+      security:
+        - sessionCookie: []
+          csrfHeader: []
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Challenge to complete with `POST /api/auth/mfa`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MfaChallenge'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: The user has no MFA method enrolled (`auth.mfa.not_enrolled`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/auth/logout:
+    post:
+      tags: [session]
+      operationId: logout
+      summary: Revoke the current session (emits `session.revoked`, back-channel logout to clients).
+      security:
+        - sessionCookie: []
+          csrfHeader: []
+      responses:
+        '204':
+          description: Logged out; session cookie cleared.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/password-reset:
+    post:
+      tags: [session]
+      operationId: requestPasswordReset
+      summary: Request a password reset email. Always 202 (never reveals whether the address exists).
+      security:
+        - csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+      responses:
+        '202':
+          description: Accepted.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/auth/password-reset/confirm:
+    post:
+      tags: [session]
+      operationId: confirmPasswordReset
+      summary: Set a new password with a reset token. Revokes all sessions and refresh-token families.
+      security:
+        - csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirmRequest'
+      responses:
+        '202':
+          description: Password changed.
+        '400':
+          description: |
+            `auth.reset.invalid_token` (unknown, used or expired token) or password policy failure
+            (`common.validation_failed` with `fields.newPassword` = `too_short` | `breached`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/auth/session/token:
+    post:
+      tags: [session]
+      operationId: issueSessionToken
+      summary: First-party token handler — exchange the session cookie for a 10-minute access token.
+      description: |
+        Same-origin only (Origin check + `X-CSRF`). The access token is kept **in memory only** by the SPA.
+        Call again ~60 s before `expiresAt`. `401` → redirect to `/login?return_to=…`.
+        A session flagged `mfa_enrollment_required` gets `403 auth.session.mfa_enrollment_required`.
+      security:
+        - sessionCookie: []
+          csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionTokenRequest'
+      responses:
+        '200':
+          description: Access token + the current user's profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionTokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ---------------------------------------------------------------- onboarding
+  /api/auth/setup:
+    get:
+      tags: [onboarding]
+      operationId: getSetupStatus
+      summary: Whether the first-run setup wizard is available (no org exists yet).
+      security: []
+      responses:
+        '200':
+          description: Setup status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupStatus'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+    post:
+      tags: [onboarding]
+      operationId: bootstrapInstall
+      summary: First-run bootstrap (BootstrapInstall). Disabled permanently once an org exists.
+      description: Creates the org, the first (pending) domain and the owner, and signs the owner in.
+      security:
+        - csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupRequest'
+      responses:
+        '201':
+          description: Installed. Session cookie set; the owner must enroll TOTP next.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SetSessionCookie'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: '`auth.setup.already_completed`.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /api/auth/invitations/{token}:
+    get:
+      tags: [onboarding]
+      operationId: getInvitation
+      summary: Look up an invitation to render the accept-invite screen.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/InvitationToken'
+      responses:
+        '200':
+          description: Invitation details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invitation'
+        '404':
+          description: '`auth.invitation.invalid_token` (unknown, accepted or expired).'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/auth/invitations/{token}:accept:
+    post:
+      tags: [onboarding]
+      operationId: acceptInvitation
+      summary: Accept an invitation by setting a password (AcceptInvitation).
+      security:
+        - csrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/InvitationToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcceptInvitationRequest'
+      responses:
+        '200':
+          description: Session created (`authenticated` or `mfa_enrollment_required`).
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SetSessionCookie'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/auth/consent/{requestId}:
+    get:
+      tags: [onboarding]
+      operationId: getConsentRequest
+      summary: Third-party OIDC consent request details.
+      security:
+        - sessionCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/ConsentRequestId'
+      responses:
+        '200':
+          description: Consent request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsentRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [onboarding]
+      operationId: decideConsent
+      summary: Allow or deny a third-party consent request.
+      security:
+        - sessionCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/ConsentRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConsentDecision'
+      responses:
+        '200':
+          description: Where to send the browser next (the client's redirect URI with code or error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RedirectResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------------------- account
+  /api/auth/me:
+    get:
+      tags: [account]
+      operationId: getMe
+      summary: Current user's profile.
+      responses:
+        '200':
+          description: Profile.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      tags: [account]
+      operationId: updateMe
+      summary: Update the current user's profile (omitted fields are unchanged).
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MePatch'
+      responses:
+        '200':
+          description: Updated profile.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+
+  /api/auth/me/avatar:
+    put:
+      tags: [account]
+      operationId: uploadMyAvatar
+      summary: Upload a (client-cropped) avatar image, max 2 MB.
+      requestBody:
+        required: true
+        content:
+          image/png:
+            schema:
+              type: string
+              format: binary
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+          image/webp:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Updated profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+    delete:
+      tags: [account]
+      operationId: deleteMyAvatar
+      summary: Remove the avatar.
+      responses:
+        '204':
+          description: Removed.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/me/apps:
+    get:
+      tags: [account]
+      operationId: listMyApps
+      summary: App switcher — installed services the user can use.
+      responses:
+        '200':
+          description: Apps in display order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/me/password:
+    put:
+      tags: [account]
+      operationId: changeMyPassword
+      summary: Change password (step-up required). Revokes all other sessions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '204':
+          description: Changed.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/auth/me/security:
+    get:
+      tags: [account]
+      operationId: getMySecurity
+      summary: Security overview (password, MFA methods, policy).
+      responses:
+        '200':
+          description: Security overview.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecurityOverview'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/me/sessions:
+    get:
+      tags: [account]
+      operationId: listMySessions
+      summary: Active sessions (devices).
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Sessions, most recently active first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      tags: [account]
+      operationId: revokeOtherSessions
+      summary: Sign out all other sessions (keeps the current one).
+      responses:
+        '204':
+          description: Revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/me/sessions/{id}:
+    delete:
+      tags: [account]
+      operationId: revokeMySession
+      summary: Sign out one session.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/auth/me/mfa/totp:
+    post:
+      tags: [account]
+      operationId: startTotpEnrollment
+      summary: Start TOTP enrollment (step-up required unless the session is in forced enrollment).
+      description: The seed is returned only here; it is never returned again after confirmation.
+      responses:
+        '200':
+          description: Enrollment secret.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TotpEnrollment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    delete:
+      tags: [account]
+      operationId: removeTotp
+      summary: Remove the authenticator app (step-up). Rejected if MFA is required and it is the last method.
+      responses:
+        '204':
+          description: Removed.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/auth/me/mfa/totp:confirm:
+    post:
+      tags: [account]
+      operationId: confirmTotpEnrollment
+      summary: Confirm TOTP enrollment with a code. Returns recovery codes when this is the first MFA method.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TotpConfirmRequest'
+      responses:
+        '200':
+          description: Enrolled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MfaEnrollmentResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/me/mfa/webauthn/registration-options:
+    post:
+      tags: [account]
+      operationId: startWebauthnRegistration
+      summary: Get WebAuthn `PublicKeyCredentialCreationOptions` for registering a passkey (step-up).
+      responses:
+        '200':
+          description: Creation options (WebAuthn JSON, base64url-encoded buffers).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebauthnRegistrationOptions'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/auth/me/mfa/webauthn:
+    post:
+      tags: [account]
+      operationId: finishWebauthnRegistration
+      summary: Register a passkey with the attestation response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebauthnRegistrationRequest'
+      responses:
+        '201':
+          description: Registered. `recoveryCodes` is present when this is the first MFA method.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MfaEnrollmentResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/auth/me/mfa/webauthn/{id}:
+    patch:
+      tags: [account]
+      operationId: renameWebauthnCredential
+      summary: Rename a passkey.
+      parameters:
+        - $ref: '#/components/parameters/CredentialId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenameRequest'
+      responses:
+        '200':
+          description: Renamed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebauthnCredential'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [account]
+      operationId: removeWebauthnCredential
+      summary: Remove a passkey (step-up).
+      parameters:
+        - $ref: '#/components/parameters/CredentialId'
+      responses:
+        '204':
+          description: Removed.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/auth/me/mfa/recovery-codes:
+    post:
+      tags: [account]
+      operationId: regenerateRecoveryCodes
+      summary: Regenerate the 10 recovery codes (step-up). Old codes stop working. Shown once.
+      responses:
+        '200':
+          description: New codes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveryCodes'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/auth/me/app-passwords:
+    get:
+      tags: [account]
+      operationId: listAppPasswords
+      summary: App passwords (secrets are never returned).
+      responses:
+        '200':
+          description: App passwords (unrevoked), newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppPasswordList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [account]
+      operationId: createAppPassword
+      summary: Create an app password (step-up). The secret is shown exactly once.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppPasswordCreateRequest'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppPasswordCreated'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '`auth.step_up_required` or `auth.app_password.disabled_by_policy`.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /api/auth/me/app-passwords/{id}:
+    delete:
+      tags: [account]
+      operationId: revokeAppPassword
+      summary: Revoke an app password (emits `app_password.revoked`).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/auth/me/tokens:
+    get:
+      tags: [account]
+      operationId: listApiTokens
+      summary: Personal access tokens.
+      responses:
+        '200':
+          description: Tokens (unrevoked), newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiTokenList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [account]
+      operationId: createApiToken
+      summary: Create a personal access token (step-up). The secret (`sh_pat_…`) is shown exactly once.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiTokenCreateRequest'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiTokenCreated'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/auth/me/tokens/{id}:
+    delete:
+      tags: [account]
+      operationId: revokeApiToken
+      summary: Revoke a personal access token.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/auth/me/connected-apps:
+    get:
+      tags: [account]
+      operationId: listConnectedApps
+      summary: Third-party OIDC grants.
+      responses:
+        '200':
+          description: Grants.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectedAppList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/me/connected-apps/{clientId}:
+    delete:
+      tags: [account]
+      operationId: revokeConnectedApp
+      summary: Revoke a third-party grant (revokes its refresh-token families).
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------------------- admin: users
+  /api/admin/users:
+    get:
+      tags: [admin-users]
+      operationId: adminListUsers
+      summary: List users (permission `auth.user.read`).
+      parameters:
+        - name: q
+          in: query
+          description: Free text over name and addresses.
+          schema:
+            type: string
+            maxLength: 200
+        - name: status
+          in: query
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/UserStatus'
+          style: form
+          explode: false
+        - name: roleId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: domainId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: mfaEnabled
+          in: query
+          schema:
+            type: boolean
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [displayName, email, status, lastSignInAt, createdAt]
+            default: displayName
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Page of users.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUserPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [admin-users]
+      operationId: adminInviteUser
+      summary: Invite a user (InviteUser, permission `auth.user.create`).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InviteUserRequest'
+      responses:
+        '201':
+          description: User created in state `invited`; invitation email queued.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Location:
+              $ref: '#/components/headers/Location'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUser'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/IdempotencyMismatch'
+
+  /api/admin/users/{id}:
+    get:
+      tags: [admin-users]
+      operationId: adminGetUser
+      summary: Get a user (cross-tenant ids → 404).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: User.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUser'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [admin-users]
+      operationId: adminUpdateUser
+      summary: Update a user's profile fields (permission `auth.user.update`).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IfMatchRequired'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminUserPatch'
+      responses:
+        '200':
+          description: Updated user.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUser'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+
+  /api/admin/users/{id}:suspend:
+    post:
+      tags: [admin-users]
+      operationId: adminSuspendUser
+      summary: Suspend (revokes sessions, refresh families, app passwords, PATs). Permission `auth.user.suspend`.
+      description: 'Errors: `auth.user.last_owner`, `auth.user.self_action`, `auth.user.invalid_transition` (409).'
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SuspendUserRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/AdminUserOk'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+
+  /api/admin/users/{id}:reactivate:
+    post:
+      tags: [admin-users]
+      operationId: adminReactivateUser
+      summary: Reactivate a suspended user. Permission `auth.user.suspend`.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '200':
+          $ref: '#/components/responses/AdminUserOk'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+
+  /api/admin/users/{id}:delete:
+    post:
+      tags: [admin-users]
+      operationId: adminDeleteUser
+      summary: Delete a user (soft; PII purged after the org's retention). Permission `auth.user.delete`.
+      description: An `invited` user is revoked (also → `deleted`). Response carries `purgeAfter`.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteUserRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/AdminUserOk'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+
+  /api/admin/users/{id}:resetMfa:
+    post:
+      tags: [admin-users]
+      operationId: adminResetUserMfa
+      summary: Remove all MFA methods of a user (they re-enroll at next login if required). Permission `auth.user.update`.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          $ref: '#/components/responses/AdminUserOk'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/users/{id}:resetPassword:
+    post:
+      tags: [admin-users]
+      operationId: adminResetUserPassword
+      summary: Send a password-reset link to the user's contact/primary address. Permission `auth.user.update`.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '202':
+          description: Reset email queued.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/users/{id}:resendInvitation:
+    post:
+      tags: [admin-users]
+      operationId: adminResendInvitation
+      summary: Issue a fresh 7-day invitation token and resend the email (user must be `invited`).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '202':
+          description: Invitation queued.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/users/{id}/addresses:
+    get:
+      tags: [admin-users]
+      operationId: adminListUserAddresses
+      summary: Primary address and aliases of a user.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Addresses.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddressList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [admin-users]
+      operationId: adminAddUserAlias
+      summary: Add an alias address (must be on a verified domain of the org and free).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddAliasRequest'
+      responses:
+        '201':
+          description: Alias added.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Address'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/users/{id}/addresses/{addressId}:
+    delete:
+      tags: [admin-users]
+      operationId: adminRemoveUserAlias
+      summary: Remove an alias (the primary address cannot be removed).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: addressId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Removed.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  # ---------------------------------------------------------------- admin: domains
+  /api/admin/domains:
+    get:
+      tags: [admin-domains]
+      operationId: adminListDomains
+      summary: List domains (permission `auth.domain.manage`).
+      responses:
+        '200':
+          description: Domains.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [admin-domains]
+      operationId: adminAddDomain
+      summary: Add a domain (AddDomain). Starts `pending` with a TXT verification token.
+      description: 'Errors: `auth.domain.public_suffix` (400), `auth.domain.claimed_elsewhere` (409), `auth.domain.already_added` (409).'
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddDomainRequest'
+      responses:
+        '201':
+          description: Domain added.
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Domain'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/domains/{id}:
+    get:
+      tags: [admin-domains]
+      operationId: adminGetDomain
+      summary: Get a domain.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Domain.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Domain'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [admin-domains]
+      operationId: adminRemoveDomain
+      summary: Remove a domain. `409 auth.domain.has_addresses` while addresses still use it.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Removed.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/domains/{id}:verify:
+    post:
+      tags: [admin-domains]
+      operationId: adminVerifyDomain
+      summary: Check the TXT record now (VerifyDomain).
+      description: |
+        Returns the domain in its new state. A failed check is **not** an error: the domain stays `pending`
+        and `lastCheck.result` is `not_found` | `mismatch`.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Domain after the check.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Domain'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  # ---------------------------------------------------------------- admin: groups
+  /api/admin/groups:
+    get:
+      tags: [admin-groups]
+      operationId: adminListGroups
+      summary: List groups (permission `auth.group.read`).
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+            maxLength: 200
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Page of groups.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [admin-groups]
+      operationId: adminCreateGroup
+      summary: Create a group (permission `auth.group.manage`).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GroupCreateRequest'
+      responses:
+        '201':
+          description: Created.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Location:
+              $ref: '#/components/headers/Location'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Group'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/groups/{id}:
+    get:
+      tags: [admin-groups]
+      operationId: adminGetGroup
+      summary: Get a group.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Group.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Group'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [admin-groups]
+      operationId: adminUpdateGroup
+      summary: Update a group's name, address or policy.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IfMatchRequired'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GroupPatch'
+      responses:
+        '200':
+          description: Updated.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Group'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+    delete:
+      tags: [admin-groups]
+      operationId: adminDeleteGroup
+      summary: Delete a group (its address is released).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/groups/{id}/members:
+    get:
+      tags: [admin-groups]
+      operationId: adminListGroupMembers
+      summary: Direct members of a group (nested groups appear as `group` members; fetch them to expand).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Page of members.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupMemberPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [admin-groups]
+      operationId: adminAddGroupMember
+      summary: Add a member (AddMember). Errors `auth.group.cycle`, `auth.group.max_depth`, `auth.group.external_not_allowed`.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GroupMemberInput'
+      responses:
+        '201':
+          description: Added.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupMember'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/groups/{id}/members/{memberId}:
+    delete:
+      tags: [admin-groups]
+      operationId: adminRemoveGroupMember
+      summary: Remove a member.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: memberId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Removed.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------------------- admin: roles
+  /api/admin/roles:
+    get:
+      tags: [admin-roles]
+      operationId: adminListRoles
+      summary: Built-in and custom roles (permission `auth.role.read`).
+      responses:
+        '200':
+          description: Roles.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [admin-roles]
+      operationId: adminCreateRole
+      summary: Create a custom role (permission `auth.role.manage`). You cannot include permissions you don't hold.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleInput'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Role'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/roles/{id}:
+    patch:
+      tags: [admin-roles]
+      operationId: adminUpdateRole
+      summary: Update a custom role. Built-in roles → `403 auth.role.builtin_readonly`.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RolePatch'
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Role'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [admin-roles]
+      operationId: adminDeleteRole
+      summary: Delete a custom role (its assignments are removed).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/role-assignments:
+    get:
+      tags: [admin-roles]
+      operationId: adminListRoleAssignments
+      summary: Role assignments, filterable by role or principal.
+      parameters:
+        - name: roleId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: principalType
+          in: query
+          schema:
+            $ref: '#/components/schemas/PrincipalType'
+        - name: principalId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Page of assignments.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleAssignmentPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [admin-roles]
+      operationId: adminAssignRole
+      summary: Assign a role (AssignRole). `403 auth.role.privilege_escalation` / `auth.role.owner_grant_requires_owner`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleAssignmentInput'
+      responses:
+        '201':
+          description: Assigned. Idempotent — an existing identical assignment is returned as is.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleAssignment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/role-assignments/{assignmentId}:
+    delete:
+      tags: [admin-roles]
+      operationId: adminUnassignRole
+      summary: Remove an assignment. Removing the last owner → `409 auth.user.last_owner`.
+      parameters:
+        - name: assignmentId
+          in: path
+          required: true
+          description: Opaque id from `RoleAssignment.id`.
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Removed.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/permissions:
+    get:
+      tags: [admin-roles]
+      operationId: adminListPermissions
+      summary: Permission catalog contributed by all registered services.
+      responses:
+        '200':
+          description: Permissions grouped by `serviceId` on the client.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ---------------------------------------------------------------- admin: org
+  /api/admin/org:
+    get:
+      tags: [admin-org]
+      operationId: adminGetOrg
+      summary: Organization settings (permission `auth.org.manage`).
+      responses:
+        '200':
+          description: Organization.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    patch:
+      tags: [admin-org]
+      operationId: adminUpdateOrg
+      summary: Update name / slug / branding.
+      parameters:
+        - $ref: '#/components/parameters/IfMatchRequired'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrganizationPatch'
+      responses:
+        '200':
+          description: Updated.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+
+  /api/admin/org/logo:
+    put:
+      tags: [admin-org]
+      operationId: adminUploadOrgLogo
+      summary: Upload the org logo (shown on login and in the shell), max 1 MB.
+      requestBody:
+        required: true
+        content:
+          image/png:
+            schema:
+              type: string
+              format: binary
+          image/svg+xml:
+            schema:
+              type: string
+              format: binary
+          image/webp:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Updated organization.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+    delete:
+      tags: [admin-org]
+      operationId: adminDeleteOrgLogo
+      summary: Remove the org logo.
+      responses:
+        '204':
+          description: Removed.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/org/policy:
+    get:
+      tags: [admin-org]
+      operationId: adminGetOrgPolicy
+      summary: Security policies.
+      responses:
+        '200':
+          description: Policy.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgPolicy'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    patch:
+      tags: [admin-org]
+      operationId: adminUpdateOrgPolicy
+      summary: Update security policies (omitted fields unchanged).
+      parameters:
+        - $ref: '#/components/parameters/IfMatchRequired'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrgPolicyPatch'
+      responses:
+        '200':
+          description: Updated.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgPolicy'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+
+  /api/admin/idps:
+    get:
+      tags: [admin-idps]
+      operationId: adminListIdentityProviders
+      summary: External identity providers of the org (permission `auth.org.manage`).
+      responses:
+        '200':
+          description: Providers. Client secrets are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdentityProviderList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [admin-idps]
+      operationId: adminCreateIdentityProvider
+      summary: Add an external IdP (org owners only, `auth.org.manage`, step-up).
+      description: |
+        A provider signs people in only while it is `enabled` **and** its `slug` is listed in
+        `OrgPolicy.allowedIdPs`. Writes need a second factor within the last 10 minutes
+        (`403 auth.step_up_required`; users without any factor: a login within 10 minutes).
+        A duplicate slug, or more than 20 providers, is `409 common.conflict`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IdentityProviderInput'
+      responses:
+        '201':
+          description: Created.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Location:
+              $ref: '#/components/headers/Location'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdentityProvider'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/idps/{id}:
+    get:
+      tags: [admin-idps]
+      operationId: adminGetIdentityProvider
+      summary: One external IdP (permission `auth.org.manage`).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Provider.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdentityProvider'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [admin-idps]
+      operationId: adminUpdateIdentityProvider
+      summary: Change an external IdP (org owners only, step-up). `kind` and `slug` are immutable.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IfMatchRequired'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IdentityProviderPatch'
+      responses:
+        '200':
+          description: Updated.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdentityProvider'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+    delete:
+      tags: [admin-idps]
+      operationId: adminDeleteIdentityProvider
+      summary: Remove an external IdP (org owners only, step-up). Existing sessions are not affected.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/services:
+    get:
+      tags: [admin-org]
+      operationId: adminListServices
+      summary: Installed apps + health; also the manifest for app-contributed admin sections.
+      responses:
+        '200':
+          description: Services.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ---------------------------------------------------------------- admin: audit
+  /api/admin/audit:
+    get:
+      tags: [admin-audit]
+      operationId: adminSearchAudit
+      summary: Org-wide audit search (permission `auth.audit.read`), newest first.
+      parameters:
+        - name: q
+          in: query
+          description: Free text over action, actor and target display names.
+          schema:
+            type: string
+            maxLength: 200
+        - name: actorId
+          in: query
+          schema:
+            type: string
+        - name: targetId
+          in: query
+          schema:
+            type: string
+        - name: action
+          in: query
+          description: Exact action or prefix ending in `.*`, e.g. `auth.user.*`.
+          schema:
+            type: string
+        - name: service
+          in: query
+          schema:
+            type: string
+        - name: outcome
+          in: query
+          schema:
+            $ref: '#/components/schemas/AuditOutcome'
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Page of entries.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/audit/stream:
+    get:
+      tags: [admin-audit]
+      operationId: adminStreamAudit
+      summary: Live tail (SSE). Notifications only — fetch new entries with `GET /api/admin/audit?from=`.
+      description: |
+        Server-Sent Events. Heartbeat comment every 25 s. Reconnect with `Last-Event-ID`.
+        Each event: `id: <cursor>`, `event: audit`, `data: <RealtimeNotification JSON>`.
+      parameters:
+        - $ref: '#/components/parameters/LastEventId'
+      responses:
+        '200':
+          description: Event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE stream whose `data` lines are `RealtimeNotification` JSON.
+              x-sse-data-schema:
+                $ref: '#/components/schemas/RealtimeNotification'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ---------------------------------------------------------------- OIDC
+  /.well-known/openid-configuration:
+    get:
+      tags: [oidc]
+      operationId: oidcDiscovery
+      summary: OpenID Provider metadata.
+      security: []
+      responses:
+        '200':
+          description: Provider metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OidcProviderMetadata'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /jwks:
+    get:
+      tags: [oidc]
+      operationId: oidcJwks
+      summary: Signing keys (ES256). Two keys are published during rotation overlap.
+      security: []
+      responses:
+        '200':
+          description: JWK set.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Jwks'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /oauth2/authorize:
+    get:
+      tags: [oidc]
+      operationId: oidcAuthorize
+      summary: Authorization endpoint (code flow, PKCE S256 required). Redirects.
+      security: []
+      parameters:
+        - { name: response_type, in: query, required: true, schema: { type: string, enum: [code] } }
+        - { name: client_id, in: query, required: true, schema: { type: string } }
+        - { name: redirect_uri, in: query, required: true, schema: { type: string, format: uri } }
+        - { name: scope, in: query, required: true, schema: { type: string } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+        - { name: nonce, in: query, schema: { type: string } }
+        - { name: code_challenge, in: query, required: true, schema: { type: string } }
+        - { name: code_challenge_method, in: query, required: true, schema: { type: string, enum: [S256] } }
+        - { name: prompt, in: query, schema: { type: string, enum: [none, login, consent] } }
+        - { name: login_hint, in: query, schema: { type: string } }
+      responses:
+        '302':
+          description: Redirect to the login/consent page or back to `redirect_uri` with `code`/`error`.
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /oauth2/token:
+    post:
+      tags: [oidc]
+      operationId: oidcToken
+      summary: Token endpoint (authorization_code, refresh_token, client_credentials).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/OidcTokenRequest'
+      responses:
+        '200':
+          description: Tokens.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OidcTokenResponse'
+        '400':
+          description: OAuth 2.0 error (RFC 6749 §5.2), e.g. `invalid_grant` on refresh-token reuse (family revoked).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+        '401':
+          description: '`invalid_client`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+
+  /oauth2/revoke:
+    post:
+      tags: [oidc]
+      operationId: oidcRevoke
+      summary: Token revocation (RFC 7009).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/OidcRevokeRequest'
+      responses:
+        '200':
+          description: Revoked (also for unknown tokens).
+        '400':
+          description: OAuth error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+
+  /oauth2/introspect:
+    post:
+      tags: [oidc]
+      operationId: oidcIntrospect
+      summary: Token introspection (RFC 7662); client authentication required.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/OidcIntrospectRequest'
+      responses:
+        '200':
+          description: Introspection result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OidcIntrospection'
+        '401':
+          description: '`invalid_client`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+
+  /oauth2/userinfo:
+    get:
+      tags: [oidc]
+      operationId: oidcUserinfo
+      summary: UserInfo endpoint.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Claims.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OidcUserInfo'
+        '401':
+          description: Invalid token (`WWW-Authenticate` header per RFC 6750).
+
+  /oauth2/end_session:
+    get:
+      tags: [oidc]
+      operationId: oidcEndSession
+      summary: RP-initiated logout. Revokes the session and redirects.
+      security: []
+      parameters:
+        - { name: id_token_hint, in: query, schema: { type: string } }
+        - { name: client_id, in: query, schema: { type: string } }
+        - { name: post_logout_redirect_uri, in: query, schema: { type: string, format: uri } }
+        - { name: state, in: query, schema: { type: string } }
+      responses:
+        '302':
+          description: Redirect to `post_logout_redirect_uri` (if registered) or `/login`.
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: ES256 access token from Auth (10 min); `aud` must include `auth`.
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-sh_session
+      description: HttpOnly Auth session cookie (`Secure; SameSite=Lax`).
+    csrfHeader:
+      type: apiKey
+      in: header
+      name: X-CSRF
+      description: Double-submit CSRF token; must equal the `__Host-sh_csrf` cookie.
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CredentialId:
+      name: id
+      in: path
+      required: true
+      description: WebAuthn credential id (base64url).
+      schema:
+        type: string
+    InvitationToken:
+      name: token
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 256
+    ConsentRequestId:
+      name: requestId
+      in: path
+      required: true
+      schema:
+        type: string
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque cursor from a previous page's `nextCursor`.
+      schema:
+        type: string
+        maxLength: 1024
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    IfMatch:
+      name: If-Match
+      in: header
+      description: '`"<version>"` from the resource''s `ETag`. Optional here; when sent it is enforced.'
+      schema:
+        type: string
+    IfMatchRequired:
+      name: If-Match
+      in: header
+      required: true
+      description: '`"<version>"` from the resource''s `ETag`.'
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: Client-generated unique key (UUID recommended); replays return the first response for 24 h.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 255
+    LastEventId:
+      name: Last-Event-ID
+      in: header
+      description: Resume an SSE stream after this event id.
+      schema:
+        type: string
+
+  headers:
+    ETag:
+      description: '`"<version>"` of the returned resource.'
+      schema:
+        type: string
+    Location:
+      description: URL of the created resource or redirect target.
+      schema:
+        type: string
+    RetryAfter:
+      description: Seconds until the request may be retried.
+      schema:
+        type: integer
+    SetSessionCookie:
+      description: '`__Host-sh_session=…; Path=/; HttpOnly; Secure; SameSite=Lax` (set only when a session is created).'
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: Malformed request or validation failure (`common.validation_failed` with `fields`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Not authenticated (`common.unauthenticated`, `auth.login.failed`, `auth.mfa.invalid_code`, …).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: Not allowed (`common.forbidden`, `auth.step_up_required`, `auth.csrf_failed`, …).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: Not found (also for other tenants' ids).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: State conflict (invariant or uniqueness violation); see `code`.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PreconditionFailed:
+      description: '`If-Match` does not match the current version (`common.precondition_failed`).'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PreconditionRequired:
+      description: '`If-Match` is required (`common.precondition_required`).'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    IdempotencyMismatch:
+      description: Same `Idempotency-Key` reused with a different body (`common.idempotency_key_reused`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PayloadTooLarge:
+      description: Body too large (`common.payload_too_large`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    TooManyRequests:
+      description: Rate limited (`common.rate_limited`); see `Retry-After`.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    AdminUserOk:
+      description: The user after the action.
+      headers:
+        ETag:
+          $ref: '#/components/headers/ETag'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AdminUser'
+
+  schemas:
+    # ------------------------------------------------------------ common
+    Problem:
+      type: object
+      description: RFC 9457 problem details.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          description: URI reference; `about:blank` or `https://suitehive.org/problems/<code>`.
+        title:
+          type: string
+          description: Short, client-safe summary.
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          description: Stable machine-readable code; see `ErrorCode` for the known values.
+          examples: [auth.user.last_owner]
+        fields:
+          type: object
+          description: 'Validation details: field name (JSON pointer for nested fields) to reason code.'
+          additionalProperties:
+            type: string
+        requestId:
+          type: string
+          description: Correlation id to show to the user for support.
+        retryAfterSeconds:
+          type: integer
+          description: Present for rate limits / lockouts.
+    ErrorCode:
+      type: string
+      description: Known `Problem.code` values for this service (common + auth).
+      enum:
+        - common.invalid_json
+        - common.validation_failed
+        - common.unauthenticated
+        - common.forbidden
+        - common.not_found
+        - common.conflict
+        - common.precondition_failed
+        - common.precondition_required
+        - common.idempotency_key_required
+        - common.idempotency_key_reused
+        - common.rate_limited
+        - common.payload_too_large
+        - common.unsupported_media_type
+        - common.cursor_expired
+        - common.internal
+        - common.unavailable
+        - auth.login.failed
+        - auth.mfa.invalid_code
+        - auth.mfa.challenge_expired
+        - auth.mfa.not_enrolled
+        - auth.mfa.last_method_required
+        - auth.step_up_required
+        - auth.session.mfa_enrollment_required
+        - auth.csrf_failed
+        - auth.token.audience_not_allowed
+        - auth.password.too_short
+        - auth.password.breached
+        - auth.password.incorrect
+        - auth.reset.invalid_token
+        - auth.invitation.invalid_token
+        - auth.setup.already_completed
+        - auth.user.invalid_transition
+        - auth.user.last_owner
+        - auth.user.self_action
+        - auth.user.address_taken
+        - auth.user.domain_not_verified
+        - auth.user.primary_address_immutable
+        - auth.domain.public_suffix
+        - auth.domain.invalid_name
+        - auth.domain.already_added
+        - auth.domain.claimed_elsewhere
+        - auth.domain.has_addresses
+        - auth.group.cycle
+        - auth.group.max_depth
+        - auth.group.external_not_allowed
+        - auth.group.member_exists
+        - auth.role.privilege_escalation
+        - auth.role.owner_grant_requires_owner
+        - auth.role.builtin_readonly
+        - auth.role.name_taken
+        - auth.role.unknown_permission
+        - auth.app_password.disabled_by_policy
+        - auth.org.slug_taken
+    Page:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        nextCursor:
+          type: [string, 'null']
+    CsrfToken:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+    RedirectResponse:
+      type: object
+      required: [redirectTo]
+      properties:
+        redirectTo:
+          type: string
+          description: Absolute or same-origin URL to navigate to.
+    RealtimeNotification:
+      type: object
+      description: SSE payload — "something changed" + cursor, never data.
+      required: [topic, cursor]
+      properties:
+        topic:
+          type: string
+          enum: [audit, session]
+        cursor:
+          type: string
+        reason:
+          type: string
+          description: For `session`, e.g. `revoked`.
+    Timestamp:
+      type: string
+      format: date-time
+      description: RFC 3339, UTC.
+
+    # ------------------------------------------------------------ session
+    LoginDiscovery:
+      type: object
+      required: [idps]
+      properties:
+        orgName:
+          type: [string, 'null']
+        logoUrl:
+          type: [string, 'null']
+        idps:
+          type: array
+          items:
+            $ref: '#/components/schemas/IdentityProviderButton'
+    IdentityProviderButton:
+      type: object
+      required: [id, kind, displayName, startUrl]
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          enum: [google, microsoft, oidc, saml]
+        displayName:
+          type: string
+        startUrl:
+          type: string
+          description: Navigate the browser here to start federation.
+    IdentityProviderKind:
+      type: string
+      enum: [google, microsoft, oidc]
+      description: |
+        All speak OpenID Connect. `google` presets the issuer `https://accounts.google.com`;
+        `microsoft` needs the tenant-specific issuer `https://login.microsoftonline.com/<tenant-id>/v2.0`
+        (and the `xms_edov` optional claim, since Entra ID sends no `email_verified`).
+    IdentityProvider:
+      type: object
+      required: [id, slug, kind, displayName, issuer, clientId, hasClientSecret, scopes, enabled, allowedByPolicy, redirectUri, createdAt, updatedAt, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9_-]{0,63}$'
+          description: The id `OrgPolicy.allowedIdPs` refers to.
+        kind:
+          $ref: '#/components/schemas/IdentityProviderKind'
+        displayName:
+          type: string
+          description: Button label ("Continue with <displayName>").
+        issuer:
+          type: string
+          format: uri
+        clientId:
+          type: string
+        hasClientSecret:
+          type: boolean
+          description: A client secret is stored (encrypted). It is never returned.
+        scopes:
+          type: array
+          items:
+            type: string
+          description: Requested scopes; always includes `openid`, `email`, `profile`.
+        enabled:
+          type: boolean
+        allowedByPolicy:
+          type: boolean
+          description: The slug is listed in `OrgPolicy.allowedIdPs` (both are needed for sign-in).
+        redirectUri:
+          type: string
+          format: uri
+          description: Register this redirect URI at the IdP.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+        version:
+          type: integer
+    IdentityProviderList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/IdentityProvider'
+    IdentityProviderInput:
+      type: object
+      required: [kind, clientId]
+      additionalProperties: false
+      properties:
+        slug:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9_-]{0,63}$'
+          description: Defaults to the kind for `google` / `microsoft`; required for `oidc`.
+        kind:
+          $ref: '#/components/schemas/IdentityProviderKind'
+        displayName:
+          type: string
+          maxLength: 80
+          description: Defaults to "Google" / "Microsoft"; required for `oidc`.
+        issuer:
+          type: string
+          format: uri
+          maxLength: 512
+          description: HTTPS issuer URL (OIDC discovery). Defaults for `google`.
+        clientId:
+          type: string
+          minLength: 1
+          maxLength: 512
+        clientSecret:
+          type: string
+          maxLength: 4096
+          description: Omit for public clients (PKCE only).
+        scopes:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            maxLength: 128
+        enabled:
+          type: boolean
+          default: false
+    IdentityProviderPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        displayName:
+          type: string
+          maxLength: 80
+        issuer:
+          type: string
+          format: uri
+          maxLength: 512
+        clientId:
+          type: string
+          minLength: 1
+          maxLength: 512
+        clientSecret:
+          type: string
+          maxLength: 4096
+          description: Replaces the stored secret; an empty string removes it.
+        scopes:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            maxLength: 128
+        enabled:
+          type: boolean
+    LoginRequest:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        returnTo:
+          type: string
+          description: Same-origin path; validated against installed app paths (no open redirects).
+          maxLength: 2048
+    LoginResult:
+      description: Discriminated by `status`.
+      oneOf:
+        - $ref: '#/components/schemas/LoginAuthenticated'
+        - $ref: '#/components/schemas/LoginMfaRequired'
+        - $ref: '#/components/schemas/LoginMfaEnrollmentRequired'
+      discriminator:
+        propertyName: status
+        mapping:
+          authenticated: '#/components/schemas/LoginAuthenticated'
+          mfa_required: '#/components/schemas/LoginMfaRequired'
+          mfa_enrollment_required: '#/components/schemas/LoginMfaEnrollmentRequired'
+    LoginAuthenticated:
+      type: object
+      required: [status, redirectTo]
+      properties:
+        status:
+          type: string
+          const: authenticated
+        redirectTo:
+          type: string
+          description: Validated `returnTo`, else the last used app path.
+        stepUpUntil:
+          $ref: '#/components/schemas/Timestamp'
+          description: Present after a step-up challenge; privileged writes are allowed until then.
+    LoginMfaRequired:
+      type: object
+      required: [status, challenge]
+      properties:
+        status:
+          type: string
+          const: mfa_required
+        challenge:
+          $ref: '#/components/schemas/MfaChallenge'
+    LoginMfaEnrollmentRequired:
+      type: object
+      required: [status, redirectTo]
+      description: Session exists but only enrollment endpoints are allowed until MFA is set up.
+      properties:
+        status:
+          type: string
+          const: mfa_enrollment_required
+        redirectTo:
+          type: string
+          description: The enrollment page, e.g. `/account/security/setup`.
+    MfaMethod:
+      type: string
+      enum: [totp, webauthn, recovery_code]
+    MfaChallenge:
+      type: object
+      required: [id, purpose, methods, expiresAt]
+      properties:
+        id:
+          type: string
+        purpose:
+          type: string
+          enum: [login, step_up]
+        methods:
+          type: array
+          description: Available methods, preferred first (passkey first when enrolled).
+          items:
+            $ref: '#/components/schemas/MfaMethod'
+        expiresAt:
+          $ref: '#/components/schemas/Timestamp'
+        webauthn:
+          $ref: '#/components/schemas/WebauthnAssertionOptions'
+    WebauthnAssertionOptions:
+      type: object
+      description: '`PublicKeyCredentialRequestOptionsJSON` (WebAuthn L3), buffers base64url.'
+      additionalProperties: true
+      required: [challenge]
+      properties:
+        challenge:
+          type: string
+        rpId:
+          type: string
+        timeout:
+          type: integer
+        userVerification:
+          type: string
+          enum: [required, preferred, discouraged]
+        allowCredentials:
+          type: array
+          items:
+            type: object
+            required: [id, type]
+            properties:
+              id:
+                type: string
+              type:
+                type: string
+                const: public-key
+              transports:
+                type: array
+                items:
+                  type: string
+    MfaCompleteRequest:
+      type: object
+      required: [challengeId, method]
+      additionalProperties: false
+      properties:
+        challengeId:
+          type: string
+        method:
+          $ref: '#/components/schemas/MfaMethod'
+        code:
+          type: string
+          description: TOTP code (6 digits) or recovery code. Required for `totp` / `recovery_code`.
+          maxLength: 64
+        webauthnResponse:
+          type: object
+          description: '`AuthenticationResponseJSON` from `navigator.credentials.get`. Required for `webauthn`.'
+          additionalProperties: true
+    PasswordResetRequest:
+      type: object
+      required: [email]
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+    PasswordResetConfirmRequest:
+      type: object
+      required: [token, newPassword]
+      additionalProperties: false
+      properties:
+        token:
+          type: string
+          maxLength: 256
+        newPassword:
+          type: string
+          minLength: 12
+          maxLength: 1024
+    SessionTokenRequest:
+      type: object
+      required: [audience]
+      additionalProperties: false
+      properties:
+        audience:
+          type: array
+          minItems: 1
+          maxItems: 20
+          description: Registered service ids the token must be valid for, e.g. `["mail","calendar"]`.
+          items:
+            type: string
+            pattern: '^[a-z][a-z0-9-]{1,30}$'
+    SessionTokenResponse:
+      type: object
+      required: [accessToken, tokenType, expiresIn, expiresAt, audience, user]
+      properties:
+        accessToken:
+          type: string
+          description: ES256 JWT. Keep in memory only.
+        tokenType:
+          type: string
+          const: Bearer
+        expiresIn:
+          type: integer
+          description: Seconds (600).
+        expiresAt:
+          $ref: '#/components/schemas/Timestamp'
+        audience:
+          type: array
+          items:
+            type: string
+        user:
+          $ref: '#/components/schemas/Me'
+
+    # ------------------------------------------------------------ onboarding
+    SetupStatus:
+      type: object
+      required: [available]
+      properties:
+        available:
+          type: boolean
+          description: True only when no organization exists.
+    SetupRequest:
+      type: object
+      required: [orgName, orgSlug, domain, admin]
+      additionalProperties: false
+      properties:
+        orgName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        orgSlug:
+          $ref: '#/components/schemas/OrgSlug'
+        domain:
+          type: string
+          description: First domain (IDNA allowed; normalized server-side).
+          maxLength: 253
+        admin:
+          type: object
+          required: [displayName, localPart, password]
+          additionalProperties: false
+          properties:
+            displayName:
+              type: string
+              minLength: 1
+              maxLength: 200
+            givenName:
+              type: string
+              maxLength: 100
+            familyName:
+              type: string
+              maxLength: 100
+            localPart:
+              type: string
+              description: Local part on `domain`, e.g. `admin` → `admin@<domain>`.
+              maxLength: 64
+            password:
+              type: string
+              minLength: 12
+              maxLength: 1024
+            locale:
+              type: string
+              examples: [en-US]
+            timeZone:
+              type: string
+              examples: [Europe/Berlin]
+    SetupResult:
+      type: object
+      required: [org, domain, user, redirectTo]
+      properties:
+        org:
+          $ref: '#/components/schemas/Organization'
+        domain:
+          $ref: '#/components/schemas/Domain'
+        user:
+          $ref: '#/components/schemas/Me'
+        redirectTo:
+          type: string
+          description: The TOTP enrollment page.
+    Invitation:
+      type: object
+      required: [email, displayName, orgName, mfaRequired, passwordPolicy, expiresAt]
+      properties:
+        email:
+          type: string
+          format: email
+        displayName:
+          type: string
+        orgName:
+          type: string
+        orgLogoUrl:
+          type: [string, 'null']
+        mfaRequired:
+          type: boolean
+          description: Whether 2-step enrollment follows the password step.
+        passwordPolicy:
+          $ref: '#/components/schemas/PasswordPolicy'
+        expiresAt:
+          $ref: '#/components/schemas/Timestamp'
+    PasswordPolicy:
+      type: object
+      required: [minLength, checkBreached]
+      properties:
+        minLength:
+          type: integer
+          minimum: 12
+        checkBreached:
+          type: boolean
+    AcceptInvitationRequest:
+      type: object
+      required: [password]
+      additionalProperties: false
+      properties:
+        password:
+          type: string
+          minLength: 12
+          maxLength: 1024
+    ConsentRequest:
+      type: object
+      required: [id, client, scopes]
+      properties:
+        id:
+          type: string
+        client:
+          type: object
+          required: [id, name]
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            logoUrl:
+              type: [string, 'null']
+            homepageUrl:
+              type: [string, 'null']
+        scopes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScopeDescription'
+    ScopeDescription:
+      type: object
+      required: [name, description]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+    ConsentDecision:
+      type: object
+      required: [decision]
+      additionalProperties: false
+      properties:
+        decision:
+          type: string
+          enum: [allow, deny]
+
+    # ------------------------------------------------------------ users / profile
+    UserStatus:
+      type: string
+      enum: [invited, active, suspended, deleted]
+    UserPreferences:
+      type: object
+      description: Cross-app UI preferences stored with the profile.
+      properties:
+        theme:
+          type: string
+          enum: [system, light, dark]
+          default: system
+        density:
+          type: string
+          enum: [comfortable, compact]
+          default: comfortable
+        readingFont:
+          type: string
+          enum: [sans, serif]
+          default: sans
+        dateFormat:
+          type: string
+          enum: [locale, iso, dmy, mdy]
+          default: locale
+        timeFormat:
+          type: string
+          enum: [locale, h12, h24]
+          default: locale
+    Me:
+      type: object
+      required: [id, orgId, email, displayName, locale, timeZone, status, roles, permissions, isOrgOwner, mfaEnabled, preferences, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+        orgId:
+          type: string
+          format: uuid
+        orgName:
+          type: string
+        email:
+          type: string
+          format: email
+          description: Primary address.
+        displayName:
+          type: string
+        givenName:
+          type: [string, 'null']
+        familyName:
+          type: [string, 'null']
+        locale:
+          type: string
+          description: BCP 47 tag.
+          examples: [en-US]
+        timeZone:
+          type: string
+          description: IANA time zone.
+          examples: [Europe/Berlin]
+        avatarUrl:
+          type: [string, 'null']
+        status:
+          $ref: '#/components/schemas/UserStatus'
+        roles:
+          type: array
+          description: Role names (built-in `owner|admin|user_admin|helpdesk|member` or custom).
+          items:
+            type: string
+        permissions:
+          type: array
+          description: Effective permissions (union of roles), used to show/hide admin UI.
+          items:
+            type: string
+        isOrgOwner:
+          type: boolean
+        mfaEnabled:
+          type: boolean
+        preferences:
+          $ref: '#/components/schemas/UserPreferences'
+        version:
+          type: integer
+    MePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        givenName:
+          type: [string, 'null']
+          maxLength: 100
+        familyName:
+          type: [string, 'null']
+          maxLength: 100
+        locale:
+          type: string
+          maxLength: 35
+        timeZone:
+          type: string
+          maxLength: 64
+        preferences:
+          $ref: '#/components/schemas/UserPreferences'
+    AppLink:
+      type: object
+      required: [id, name, url, icon]
+      properties:
+        id:
+          type: string
+          examples: [mail]
+        name:
+          type: string
+          examples: [Mail]
+        url:
+          type: string
+          description: Entry URL of the app's web UI, e.g. `/mail`.
+        icon:
+          type: string
+          description: Icon key (lucide name) or image URL.
+    AppList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AppLink'
+    ChangePasswordRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      additionalProperties: false
+      properties:
+        currentPassword:
+          type: string
+          maxLength: 1024
+        newPassword:
+          type: string
+          minLength: 12
+          maxLength: 1024
+    SecurityOverview:
+      type: object
+      required: [passwordPolicy, mfaRequired, totp, webauthn, recoveryCodesRemaining]
+      properties:
+        passwordChangedAt:
+          type: [string, 'null']
+          format: date-time
+        passwordPolicy:
+          $ref: '#/components/schemas/PasswordPolicy'
+        mfaRequired:
+          type: boolean
+          description: True if org policy requires MFA for this user.
+        totp:
+          type: object
+          required: [enrolled]
+          properties:
+            enrolled:
+              type: boolean
+            confirmedAt:
+              type: [string, 'null']
+              format: date-time
+        webauthn:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebauthnCredential'
+        recoveryCodesRemaining:
+          type: integer
+          minimum: 0
+          maximum: 10
+        allowAppPasswords:
+          type: boolean
+    WebauthnCredential:
+      type: object
+      required: [id, name, createdAt]
+      properties:
+        id:
+          type: string
+          description: base64url credential id.
+        name:
+          type: string
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        lastUsedAt:
+          type: [string, 'null']
+          format: date-time
+    TotpEnrollment:
+      type: object
+      required: [secret, otpauthUrl]
+      properties:
+        secret:
+          type: string
+          description: Base32 seed for manual entry.
+        otpauthUrl:
+          type: string
+          description: '`otpauth://totp/...` URI to render as a QR code.'
+    TotpConfirmRequest:
+      type: object
+      required: [code]
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          pattern: '^[0-9]{6}$'
+    MfaEnrollmentResult:
+      type: object
+      required: [method]
+      properties:
+        method:
+          $ref: '#/components/schemas/MfaMethod'
+        credential:
+          $ref: '#/components/schemas/WebauthnCredential'
+        recoveryCodes:
+          type: array
+          description: Present only when this is the user's first MFA method. Shown once.
+          items:
+            type: string
+    WebauthnRegistrationOptions:
+      type: object
+      description: '`PublicKeyCredentialCreationOptionsJSON` (WebAuthn L3), buffers base64url.'
+      additionalProperties: true
+      required: [challenge, rp, user, pubKeyCredParams]
+      properties:
+        challenge:
+          type: string
+        rp:
+          type: object
+          additionalProperties: true
+        user:
+          type: object
+          additionalProperties: true
+        pubKeyCredParams:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        timeout:
+          type: integer
+        excludeCredentials:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        authenticatorSelection:
+          type: object
+          additionalProperties: true
+        attestation:
+          type: string
+    WebauthnRegistrationRequest:
+      type: object
+      required: [name, credential]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        credential:
+          type: object
+          description: '`RegistrationResponseJSON` from `navigator.credentials.create`.'
+          additionalProperties: true
+    RenameRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+    RecoveryCodes:
+      type: object
+      required: [codes]
+      properties:
+        codes:
+          type: array
+          minItems: 10
+          maxItems: 10
+          items:
+            type: string
+    SessionInfo:
+      type: object
+      required: [id, createdAt, lastSeenAt, expiresAt, current]
+      properties:
+        id:
+          type: string
+          format: uuid
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        lastSeenAt:
+          $ref: '#/components/schemas/Timestamp'
+        expiresAt:
+          $ref: '#/components/schemas/Timestamp'
+        mfaAt:
+          type: [string, 'null']
+          format: date-time
+        ip:
+          type: [string, 'null']
+        approxLocation:
+          type: [string, 'null']
+          description: City/country from IP, if a GeoIP database is configured.
+        userAgent:
+          type: [string, 'null']
+        device:
+          type: [string, 'null']
+          description: Parsed device, e.g. `Mac`, `iPhone`.
+        browser:
+          type: [string, 'null']
+          description: Parsed browser, e.g. `Firefox 131`.
+        current:
+          type: boolean
+          description: True for the session making the request ("This device").
+    SessionPage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/SessionInfo'
+    AppPasswordScope:
+      type: string
+      enum: [imap, smtp, caldav]
+    AppPassword:
+      type: object
+      required: [id, label, scopes, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        label:
+          type: string
+        scopes:
+          type: array
+          items:
+            $ref: '#/components/schemas/AppPasswordScope'
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        lastUsedAt:
+          type: [string, 'null']
+          format: date-time
+    AppPasswordList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AppPassword'
+    AppPasswordCreateRequest:
+      type: object
+      required: [label, scopes]
+      additionalProperties: false
+      properties:
+        label:
+          type: string
+          minLength: 1
+          maxLength: 100
+        scopes:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/AppPasswordScope'
+    AppPasswordCreated:
+      type: object
+      required: [appPassword, secret, clientSetup]
+      properties:
+        appPassword:
+          $ref: '#/components/schemas/AppPassword'
+        secret:
+          type: string
+          description: Shown exactly once; never retrievable again.
+        clientSetup:
+          $ref: '#/components/schemas/ClientSetupHints'
+    ClientSetupHints:
+      type: object
+      description: Server names/ports for configuring mail and calendar clients.
+      required: [username]
+      properties:
+        username:
+          type: string
+        imap:
+          $ref: '#/components/schemas/ServerEndpoint'
+        smtp:
+          $ref: '#/components/schemas/ServerEndpoint'
+        caldavUrl:
+          type: [string, 'null']
+    ServerEndpoint:
+      type: [object, 'null']
+      required: [host, port, security]
+      properties:
+        host:
+          type: string
+        port:
+          type: integer
+        security:
+          type: string
+          enum: [tls, starttls]
+    ApiToken:
+      type: object
+      required: [id, name, scopes, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        prefix:
+          type: string
+          description: First characters of the token for recognition, e.g. `sh_pat_ab12`.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        expiresAt:
+          type: [string, 'null']
+          format: date-time
+        lastUsedAt:
+          type: [string, 'null']
+          format: date-time
+    ApiTokenList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiToken'
+    ApiTokenCreateRequest:
+      type: object
+      required: [name, scopes]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        scopes:
+          type: array
+          minItems: 1
+          description: OAuth-style scopes, e.g. `mail.read`, `calendar.write`.
+          items:
+            type: string
+        expiresAt:
+          type: [string, 'null']
+          format: date-time
+    ApiTokenCreated:
+      type: object
+      required: [token, secret]
+      properties:
+        token:
+          $ref: '#/components/schemas/ApiToken'
+        secret:
+          type: string
+          description: '`sh_pat_…`, shown exactly once.'
+    ConnectedApp:
+      type: object
+      required: [clientId, name, scopes, grantedAt]
+      properties:
+        clientId:
+          type: string
+        name:
+          type: string
+        logoUrl:
+          type: [string, 'null']
+        scopes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScopeDescription'
+        grantedAt:
+          $ref: '#/components/schemas/Timestamp'
+        lastUsedAt:
+          type: [string, 'null']
+          format: date-time
+    ConnectedAppList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConnectedApp'
+
+    # ------------------------------------------------------------ admin users
+    RoleRef:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    AdminUser:
+      type: object
+      required: [id, orgId, email, displayName, locale, timeZone, status, isOrgOwner, roles, mfaEnabled, createdAt, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+        orgId:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+          description: Primary address.
+        displayName:
+          type: string
+        givenName:
+          type: [string, 'null']
+        familyName:
+          type: [string, 'null']
+        locale:
+          type: string
+        timeZone:
+          type: string
+        avatarUrl:
+          type: [string, 'null']
+        status:
+          $ref: '#/components/schemas/UserStatus'
+        statusReason:
+          type: [string, 'null']
+        isOrgOwner:
+          type: boolean
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoleRef'
+        mfaEnabled:
+          type: boolean
+        lockedUntil:
+          type: [string, 'null']
+          format: date-time
+        lastSignInAt:
+          type: [string, 'null']
+          format: date-time
+        storageUsedBytes:
+          type: [integer, 'null']
+          format: int64
+          description: From `mail.MailboxUsage` when mail is installed and reachable.
+        purgeAfter:
+          type: [string, 'null']
+          format: date-time
+          description: Set when `status = deleted`.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        version:
+          type: integer
+    AdminUserPage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/AdminUser'
+    InviteUserRequest:
+      type: object
+      required: [displayName, email, contactEmail]
+      additionalProperties: false
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        givenName:
+          type: string
+          maxLength: 100
+        familyName:
+          type: string
+          maxLength: 100
+        email:
+          type: string
+          format: email
+          description: New primary address; domain must be verified in this org and the address free.
+        contactEmail:
+          type: string
+          format: email
+          description: External address the invitation is sent to.
+        locale:
+          type: string
+        timeZone:
+          type: string
+        roleIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        groupIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+    AdminUserPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        givenName:
+          type: [string, 'null']
+          maxLength: 100
+        familyName:
+          type: [string, 'null']
+          maxLength: 100
+        locale:
+          type: string
+        timeZone:
+          type: string
+        primaryAddressId:
+          type: string
+          format: uuid
+          description: Promote one of the user's aliases to primary.
+    SuspendUserRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+    DeleteUserRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        transferToUserId:
+          type: [string, 'null']
+          format: uuid
+          description: Receives mail/calendar data ownership during the purge saga.
+    AddressKind:
+      type: string
+      enum: [primary, alias, group]
+    Address:
+      type: object
+      required: [id, address, kind, sendAs]
+      properties:
+        id:
+          type: string
+          format: uuid
+        address:
+          type: string
+          format: email
+        kind:
+          $ref: '#/components/schemas/AddressKind'
+        sendAs:
+          type: boolean
+    AddressList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
+    AddAliasRequest:
+      type: object
+      required: [address]
+      additionalProperties: false
+      properties:
+        address:
+          type: string
+          format: email
+        sendAs:
+          type: boolean
+          default: true
+
+    # ------------------------------------------------------------ domains
+    DomainStatus:
+      type: string
+      enum: [pending, verified, degraded, expired, removed]
+    DnsRecord:
+      type: object
+      required: [type, name, value]
+      properties:
+        type:
+          type: string
+          enum: [TXT, MX, CNAME, SRV]
+        name:
+          type: string
+          description: Fully qualified record name.
+        value:
+          type: string
+        ttl:
+          type: integer
+    Domain:
+      type: object
+      required: [id, name, status, verificationRecord, failedChecks, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: IDNA-normalized (A-label) domain.
+        unicodeName:
+          type: string
+          description: U-label form for display.
+        status:
+          $ref: '#/components/schemas/DomainStatus'
+        statusReason:
+          type: [string, 'null']
+          enum: [claimed_elsewhere, verification_timeout, recheck_failed, null]
+        verificationRecord:
+          $ref: '#/components/schemas/DnsRecord'
+        verifiedAt:
+          type: [string, 'null']
+          format: date-time
+        lastCheck:
+          type: [object, 'null']
+          required: [checkedAt, result]
+          properties:
+            checkedAt:
+              $ref: '#/components/schemas/Timestamp'
+            result:
+              type: string
+              enum: [ok, not_found, mismatch, dns_error]
+        failedChecks:
+          type: integer
+        expiresAt:
+          type: [string, 'null']
+          format: date-time
+          description: For `pending` domains — 7 days after creation.
+        addressCount:
+          type: integer
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+    DomainList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Domain'
+    AddDomainRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          maxLength: 253
+
+    # ------------------------------------------------------------ groups
+    WhoCanPost:
+      type: string
+      enum: [anyone, org, members]
+    Group:
+      type: object
+      required: [id, name, whoCanPost, allowExternalMembers, memberCount, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: [string, 'null']
+          format: email
+          description: Distribution-list address, if any.
+        description:
+          type: [string, 'null']
+        whoCanPost:
+          $ref: '#/components/schemas/WhoCanPost'
+        allowExternalMembers:
+          type: boolean
+        memberCount:
+          type: integer
+          description: Direct members.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        version:
+          type: integer
+    GroupPage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/Group'
+    GroupCreateRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        email:
+          type: [string, 'null']
+          format: email
+        description:
+          type: [string, 'null']
+          maxLength: 1000
+        whoCanPost:
+          $ref: '#/components/schemas/WhoCanPost'
+        allowExternalMembers:
+          type: boolean
+          default: false
+    GroupPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        email:
+          type: [string, 'null']
+          format: email
+        description:
+          type: [string, 'null']
+          maxLength: 1000
+        whoCanPost:
+          $ref: '#/components/schemas/WhoCanPost'
+        allowExternalMembers:
+          type: boolean
+    GroupMemberType:
+      type: string
+      enum: [user, group, external]
+    GroupMember:
+      type: object
+      required: [id, type, displayName]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/GroupMemberType'
+        userId:
+          type: [string, 'null']
+          format: uuid
+        groupId:
+          type: [string, 'null']
+          format: uuid
+        address:
+          type: [string, 'null']
+          format: email
+          description: Primary address of the user/group, or the external address.
+        displayName:
+          type: string
+        avatarUrl:
+          type: [string, 'null']
+        memberCount:
+          type: [integer, 'null']
+          description: For nested groups.
+    GroupMemberPage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/GroupMember'
+    GroupMemberInput:
+      type: object
+      required: [type]
+      additionalProperties: false
+      description: '`user` → `userId`; `group` → `groupId`; `external` → `address`.'
+      properties:
+        type:
+          $ref: '#/components/schemas/GroupMemberType'
+        userId:
+          type: string
+          format: uuid
+        groupId:
+          type: string
+          format: uuid
+        address:
+          type: string
+          format: email
+
+    # ------------------------------------------------------------ roles
+    BuiltinRole:
+      type: string
+      enum: [owner, admin, user_admin, helpdesk, member]
+    Role:
+      type: object
+      required: [id, name, builtin, permissions, assignmentCount]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: [string, 'null']
+        builtin:
+          type: boolean
+        builtinKey:
+          oneOf:
+            - $ref: '#/components/schemas/BuiltinRole'
+            - type: 'null'
+        permissions:
+          type: array
+          items:
+            type: string
+        flaggedPermissions:
+          type: array
+          description: Permissions no longer in the catalog (flagged, not deleted).
+          items:
+            type: string
+        assignmentCount:
+          type: integer
+    RoleList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Role'
+    RoleInput:
+      type: object
+      required: [name, permissions]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: [string, 'null']
+          maxLength: 500
+        permissions:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+    RolePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: [string, 'null']
+          maxLength: 500
+        permissions:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+    PrincipalType:
+      type: string
+      enum: [user, group]
+    RoleAssignment:
+      type: object
+      required: [id, roleId, roleName, principalType, principalId, principalDisplayName, scope]
+      properties:
+        id:
+          type: string
+          description: Opaque id (encodes role, principal and scope).
+        roleId:
+          type: string
+          format: uuid
+        roleName:
+          type: string
+        principalType:
+          $ref: '#/components/schemas/PrincipalType'
+        principalId:
+          type: string
+          format: uuid
+        principalDisplayName:
+          type: string
+        principalEmail:
+          type: [string, 'null']
+        scope:
+          type: string
+          const: org
+          description: v1 is always `org` (reserved for org units).
+    RoleAssignmentPage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/RoleAssignment'
+    RoleAssignmentInput:
+      type: object
+      required: [roleId, principalType, principalId]
+      additionalProperties: false
+      properties:
+        roleId:
+          type: string
+          format: uuid
+        principalType:
+          $ref: '#/components/schemas/PrincipalType'
+        principalId:
+          type: string
+          format: uuid
+    Permission:
+      type: object
+      required: [name, serviceId, description, deprecated]
+      properties:
+        name:
+          type: string
+          examples: [mail.admin.queue.read]
+        serviceId:
+          type: string
+        description:
+          type: string
+        deprecated:
+          type: boolean
+    PermissionList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Permission'
+
+    # ------------------------------------------------------------ org
+    OrgSlug:
+      type: string
+      pattern: '^[a-z0-9-]{3,40}$'
+    Organization:
+      type: object
+      required: [id, name, slug, status, createdAt, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          $ref: '#/components/schemas/OrgSlug'
+        status:
+          type: string
+          enum: [active, suspended]
+        logoUrl:
+          type: [string, 'null']
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        version:
+          type: integer
+    OrganizationPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        slug:
+          $ref: '#/components/schemas/OrgSlug'
+    MfaRequirement:
+      type: string
+      enum: [none, admins, all]
+    OrgPolicy:
+      type: object
+      required: [mfaRequired, passwordMinLength, sessionMaxAgeSeconds, sessionIdleTimeoutSeconds, allowAppPasswords, allowedIdPs, deletedUserRetentionDays, suspendedUserInbound, version]
+      properties:
+        mfaRequired:
+          $ref: '#/components/schemas/MfaRequirement'
+        mfaEnforcedFrom:
+          type: [string, 'null']
+          format: date-time
+          description: Enforcement date for a newly tightened MFA requirement (users enroll before it).
+        passwordMinLength:
+          type: integer
+          minimum: 12
+          maximum: 128
+        sessionMaxAgeSeconds:
+          type: integer
+          minimum: 3600
+        sessionIdleTimeoutSeconds:
+          type: integer
+          minimum: 300
+        allowAppPasswords:
+          type: boolean
+        allowedIdPs:
+          type: array
+          items:
+            type: string
+        deletedUserRetentionDays:
+          type: integer
+          minimum: 0
+          maximum: 3650
+          default: 30
+        suspendedUserInbound:
+          type: string
+          enum: [accept, reject]
+        version:
+          type: integer
+    OrgPolicyPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        mfaRequired:
+          $ref: '#/components/schemas/MfaRequirement'
+        mfaEnforcedFrom:
+          type: [string, 'null']
+          format: date-time
+        passwordMinLength:
+          type: integer
+          minimum: 12
+          maximum: 128
+        sessionMaxAgeSeconds:
+          type: integer
+          minimum: 3600
+        sessionIdleTimeoutSeconds:
+          type: integer
+          minimum: 300
+        allowAppPasswords:
+          type: boolean
+        allowedIdPs:
+          type: array
+          items:
+            type: string
+        deletedUserRetentionDays:
+          type: integer
+          minimum: 0
+          maximum: 3650
+        suspendedUserInbound:
+          type: string
+          enum: [accept, reject]
+    ServiceHealth:
+      type: string
+      enum: [healthy, degraded, down, unknown]
+    RegisteredService:
+      type: object
+      required: [id, displayName, baseUrl, status, health]
+      properties:
+        id:
+          type: string
+          examples: [mail]
+        displayName:
+          type: string
+        baseUrl:
+          type: string
+        icon:
+          type: [string, 'null']
+        status:
+          type: string
+          enum: [active, disabled]
+        version:
+          type: [string, 'null']
+        health:
+          $ref: '#/components/schemas/ServiceHealth'
+        healthCheckedAt:
+          type: [string, 'null']
+          format: date-time
+        adminModuleUrl:
+          type: [string, 'null']
+          description: ES module URL of the app's admin console section (lazy-loaded), if it contributes one.
+        registeredAt:
+          $ref: '#/components/schemas/Timestamp'
+    ServiceList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RegisteredService'
+
+    # ------------------------------------------------------------ audit
+    AuditOutcome:
+      type: string
+      enum: [success, failure, denied]
+    AuditEntry:
+      type: object
+      required: [id, occurredAt, service, action, actor, outcome]
+      properties:
+        id:
+          type: string
+        occurredAt:
+          $ref: '#/components/schemas/Timestamp'
+        service:
+          type: string
+        action:
+          type: string
+          examples: [auth.user.suspend]
+        actor:
+          type: object
+          required: [type, id]
+          properties:
+            type:
+              type: string
+              enum: [user, service, system, anonymous]
+            id:
+              type: string
+            displayName:
+              type: [string, 'null']
+        target:
+          type: [object, 'null']
+          required: [type, id]
+          properties:
+            type:
+              type: string
+            id:
+              type: string
+            displayName:
+              type: [string, 'null']
+        outcome:
+          $ref: '#/components/schemas/AuditOutcome'
+        ip:
+          type: [string, 'null']
+        userAgent:
+          type: [string, 'null']
+        requestId:
+          type: [string, 'null']
+        details:
+          type: object
+          additionalProperties: true
+    AuditPage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/AuditEntry'
+
+    # ------------------------------------------------------------ OIDC
+    OidcProviderMetadata:
+      type: object
+      additionalProperties: true
+      required: [issuer, authorization_endpoint, token_endpoint, jwks_uri]
+      properties:
+        issuer:
+          type: string
+        authorization_endpoint:
+          type: string
+        token_endpoint:
+          type: string
+        userinfo_endpoint:
+          type: string
+        revocation_endpoint:
+          type: string
+        introspection_endpoint:
+          type: string
+        end_session_endpoint:
+          type: string
+        jwks_uri:
+          type: string
+        scopes_supported:
+          type: array
+          items:
+            type: string
+        response_types_supported:
+          type: array
+          items:
+            type: string
+        grant_types_supported:
+          type: array
+          items:
+            type: string
+        code_challenge_methods_supported:
+          type: array
+          items:
+            type: string
+        id_token_signing_alg_values_supported:
+          type: array
+          items:
+            type: string
+    Jwks:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            required: [kty, kid]
+            properties:
+              kty:
+                type: string
+              kid:
+                type: string
+              alg:
+                type: string
+              use:
+                type: string
+              crv:
+                type: string
+              x:
+                type: string
+              y:
+                type: string
+    OidcTokenRequest:
+      type: object
+      required: [grant_type]
+      properties:
+        grant_type:
+          type: string
+          enum: [authorization_code, refresh_token, client_credentials]
+        code:
+          type: string
+        redirect_uri:
+          type: string
+        code_verifier:
+          type: string
+        refresh_token:
+          type: string
+        client_id:
+          type: string
+        client_secret:
+          type: string
+        scope:
+          type: string
+        audience:
+          type: string
+          description: Space-separated target services (client_credentials).
+    OidcTokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          const: Bearer
+        expires_in:
+          type: integer
+        refresh_token:
+          type: string
+        id_token:
+          type: string
+        scope:
+          type: string
+    OidcRevokeRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+        token_type_hint:
+          type: string
+          enum: [access_token, refresh_token]
+        client_id:
+          type: string
+        client_secret:
+          type: string
+    OidcIntrospectRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+        token_type_hint:
+          type: string
+          enum: [access_token, refresh_token]
+    OidcIntrospection:
+      type: object
+      required: [active]
+      additionalProperties: true
+      properties:
+        active:
+          type: boolean
+        sub:
+          type: string
+        aud:
+          type: array
+          items:
+            type: string
+        scope:
+          type: string
+        exp:
+          type: integer
+        iat:
+          type: integer
+        client_id:
+          type: string
+        org:
+          type: string
+        sid:
+          type: string
+    OidcUserInfo:
+      type: object
+      required: [sub]
+      additionalProperties: true
+      properties:
+        sub:
+          type: string
+        email:
+          type: string
+        email_verified:
+          type: boolean
+        name:
+          type: string
+        given_name:
+          type: string
+        family_name:
+          type: string
+        locale:
+          type: string
+        zoneinfo:
+          type: string
+        picture:
+          type: string
+        org:
+          type: string
+    OAuthError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          enum: [invalid_request, invalid_client, invalid_grant, unauthorized_client, unsupported_grant_type, invalid_scope, access_denied, server_error]
+        error_description:
+          type: string

@@ -1,0 +1,2795 @@
+openapi: 3.1.0
+info:
+  title: Suitehive Mail API
+  version: 0.1.0
+  license:
+    name: AGPL-3.0-or-later
+    identifier: AGPL-3.0-or-later
+  description: |
+    Public REST API of the **Mail** service (web UI + API clients). Source of truth: `docs/design/04-lld-mail.md` §11.
+
+    ## Conventions
+    - All paths are under `/api/mail`. JSON, `camelCase`, RFC 3339 UTC timestamps, UUIDv7 ids.
+    - Auth: `Authorization: Bearer <jwt>` whose `aud` includes `mail` (from `POST /api/auth/session/token`).
+    - Cursor pagination `?limit=&cursor=` → `{ items, nextCursor }` (`nextCursor: null` on the last page).
+    - Errors: RFC 9457 `application/problem+json` with stable `code` (see `ErrorCode`) and `fields`.
+    - Concurrency: `ETag: "<version>"` / `If-Match` (drafts, settings) → `412` on mismatch.
+    - `Idempotency-Key` is **required** on `POST /messages:send` and `POST /drafts/{id}:send`, optional on other POSTs.
+    - **Label ids**: wherever a label id is accepted, a system label may be referenced by its role name
+      (`INBOX`, `SENT`, `DRAFTS`, `TRASH`, `SPAM`, `STARRED`, `IMPORTANT`) and `ALL` means All Mail.
+    - Archive = remove `INBOX`; delete = add `TRASH`; report spam = add `SPAM`; star = add `STARRED` (equivalent to flag `flagged`).
+    - Realtime: `GET /api/mail/events` (SSE) carries only `{topic, cursor}`; clients then call `GET /api/mail/changes?since=`.
+servers:
+  - url: /
+    description: Same origin as the gateway (paths are absolute).
+tags:
+  - name: threads
+    description: Thread list, thread detail, bulk modify.
+  - name: messages
+    description: Messages, raw/part downloads, send, undo send.
+  - name: drafts
+    description: Drafts and sending drafts.
+  - name: uploads
+    description: Attachment uploads (simple and tus-style resumable).
+  - name: labels
+    description: System and user labels.
+  - name: sync
+    description: Delta API and SSE change feed.
+  - name: settings
+    description: Mail settings, identities, forwarding addresses, filters.
+  - name: contacts
+    description: Recipient autocomplete.
+  - name: admin
+    description: Mail admin (DNS guidance, DKIM keys, outbound queue and routing).
+security:
+  - bearerAuth: []
+
+paths:
+  # ---------------------------------------------------------------- threads
+  /api/mail/threads:
+    get:
+      tags: [threads]
+      operationId: listThreads
+      summary: Thread list for a label and/or search query, newest activity first.
+      parameters:
+        - name: label
+          in: query
+          description: Label id or system role name. Defaults to `INBOX` when `q` is empty, `ALL` when `q` is set.
+          schema:
+            type: string
+        - name: q
+          in: query
+          description: |
+            Gmail-style query: `from: to: cc: subject: label: in: is:unread|read|starred has:attachment
+            filename: before: after: larger: smaller:`, "phrases", `-term`, `OR`.
+          schema:
+            type: string
+            maxLength: 2000
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Page of thread summaries.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/mail/threads/{id}:
+    get:
+      tags: [threads]
+      operationId: getThread
+      summary: A thread with all its messages (sanitized HTML; remote images proxied or blocked).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: showImages
+          in: query
+          description: When true, remote images are rewritten to the image proxy instead of being blocked.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Thread.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thread'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/mail/threads:modify:
+    post:
+      tags: [threads]
+      operationId: modifyThreads
+      summary: Batch add/remove labels and set flags on every message of the given threads.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModifyRequest'
+      responses:
+        '200':
+          description: Applied. The response carries the new mailbox modseq.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModifyResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------------------- messages
+  /api/mail/messages:modify:
+    post:
+      tags: [messages]
+      operationId: modifyMessages
+      summary: Batch add/remove labels and set flags on individual messages.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModifyRequest'
+      responses:
+        '200':
+          description: Applied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModifyResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/mail/messages/{id}/raw:
+    get:
+      tags: [messages]
+      operationId: getMessageRaw
+      summary: Download the original RFC 5322 message ("Show original").
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/Disposition'
+      responses:
+        '200':
+          description: Raw message.
+          content:
+            message/rfc822:
+              schema:
+                type: string
+                format: binary
+        '302':
+          description: Redirect to a short-lived presigned blob URL (when the blob store supports it).
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/mail/messages/{id}/parts/{path}:
+    get:
+      tags: [messages]
+      operationId: getMessagePart
+      summary: Download one MIME part (attachment, inline image, text/calendar).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: path
+          in: path
+          required: true
+          description: MIME part path, dot-separated (e.g. `2`, `1.2`).
+          schema:
+            type: string
+            pattern: '^[0-9]+(\.[0-9]+)*$'
+        - $ref: '#/components/parameters/Disposition'
+      responses:
+        '200':
+          description: Part content with its own `Content-Type`.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '302':
+          description: Redirect to a short-lived presigned blob URL.
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/mail/messages:send:
+    post:
+      tags: [messages]
+      operationId: sendMessage
+      summary: Compose and send in one call (API clients). The web UI sends drafts instead.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyRequired'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Composition'
+      responses:
+        '202':
+          description: Accepted. Delivery jobs run after the undo window.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '`mail.send_as_forbidden`.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: '`mail.upload.incomplete`.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/IdempotencyMismatch'
+        '428':
+          $ref: '#/components/responses/IdempotencyKeyRequired'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '507':
+          $ref: '#/components/responses/QuotaExceeded'
+
+  /api/mail/messages/{id}:undoSend:
+    post:
+      tags: [messages]
+      operationId: undoSend
+      summary: Cancel a send within the undo window; returns the draft exactly as it was.
+      description: After the window → `409 mail.undo_window_expired`. Nothing leaves the server when undone in time.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Send cancelled; the draft is restored.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Draft'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  # ---------------------------------------------------------------- drafts
+  /api/mail/drafts:
+    post:
+      tags: [drafts]
+      operationId: createDraft
+      summary: Create a draft (also used for inline reply/forward).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DraftInput'
+      responses:
+        '201':
+          description: Created.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Location:
+              $ref: '#/components/headers/Location'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Draft'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '507':
+          $ref: '#/components/responses/QuotaExceeded'
+
+  /api/mail/drafts/{id}:
+    get:
+      tags: [drafts]
+      operationId: getDraft
+      summary: Get a draft.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Draft.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Draft'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [drafts]
+      operationId: saveDraft
+      summary: Replace a draft (autosave). `If-Match` required; `412` when another device saved first.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IfMatchRequired'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DraftInput'
+      responses:
+        '200':
+          description: Saved.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Draft'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+    delete:
+      tags: [drafts]
+      operationId: deleteDraft
+      summary: Discard a draft.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: Discarded.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+
+  /api/mail/drafts/{id}:send:
+    post:
+      tags: [drafts]
+      operationId: sendDraft
+      summary: Send a draft. Delivery is scheduled after the user's undo window.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IdempotencyKeyRequired'
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '202':
+          description: Accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '`mail.send_as_forbidden`.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: '`mail.upload.incomplete` or `mail.draft.no_recipients`.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/IdempotencyMismatch'
+        '428':
+          $ref: '#/components/responses/IdempotencyKeyRequired'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '507':
+          $ref: '#/components/responses/QuotaExceeded'
+
+  # ---------------------------------------------------------------- uploads
+  /api/mail/uploads:
+    post:
+      tags: [uploads]
+      operationId: createUpload
+      summary: Upload an attachment (single request ≤ 10 MB) or create a resumable upload (tus-style).
+      description: |
+        **Simple** (≤ 10 MB): `multipart/form-data` with a `file` part → `201` with `status: complete`.
+
+        **Resumable** (> 10 MB, tus 1.0 core subset): send no body with headers `Upload-Length` and
+        `Upload-Metadata` (`filename <base64>,contentType <base64>`) → `201` with `Location` and
+        `status: pending`. Then `PATCH /uploads/{id}` chunks; `HEAD /uploads/{id}` returns the offset to resume.
+        Max attachment size 35 MB (the SMTP SIZE limit).
+      parameters:
+        - name: Upload-Length
+          in: header
+          description: Total size in bytes (resumable creation only).
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+        - name: Upload-Metadata
+          in: header
+          description: tus metadata, comma-separated `key base64value` pairs (`filename`, `contentType`).
+          schema:
+            type: string
+        - name: Tus-Resumable
+          in: header
+          schema:
+            type: string
+            const: 1.0.0
+      requestBody:
+        required: false
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: Upload created (complete for simple uploads).
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Upload'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '507':
+          $ref: '#/components/responses/QuotaExceeded'
+
+  /api/mail/uploads/{id}:
+    get:
+      tags: [uploads]
+      operationId: getUpload
+      summary: Upload metadata and progress.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Upload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Upload'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    head:
+      tags: [uploads]
+      operationId: headUpload
+      summary: Current offset of a resumable upload (tus).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Offset headers, no body.
+          headers:
+            Upload-Offset:
+              $ref: '#/components/headers/UploadOffset'
+            Upload-Length:
+              $ref: '#/components/headers/UploadLength'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [uploads]
+      operationId: appendUpload
+      summary: Append a chunk to a resumable upload at `Upload-Offset` (tus).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: Upload-Offset
+          in: header
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: Tus-Resumable
+          in: header
+          schema:
+            type: string
+            const: 1.0.0
+      requestBody:
+        required: true
+        content:
+          application/offset+octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Chunk stored.
+          headers:
+            Upload-Offset:
+              $ref: '#/components/headers/UploadOffset'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: '`mail.upload.offset_mismatch` — re-read the offset with `HEAD`.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+    delete:
+      tags: [uploads]
+      operationId: deleteUpload
+      summary: Cancel/remove an upload not yet attached to a sent message.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Removed.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------------------- labels
+  /api/mail/labels:
+    get:
+      tags: [labels]
+      operationId: listLabels
+      summary: All labels (system + user) with counts.
+      responses:
+        '200':
+          description: Labels (system first, then user labels by name).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LabelList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [labels]
+      operationId: createLabel
+      summary: Create a user label. Nested names use `/` (`Work/ClientA`), or pass `parentId`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LabelInput'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Label'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/mail/labels/{id}:
+    patch:
+      tags: [labels]
+      operationId: updateLabel
+      summary: Rename/recolor/re-parent/hide a user label (renames keep IMAP UIDs).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LabelPatch'
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Label'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '`mail.label.system_immutable` (only `hidden` may change on system labels).'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [labels]
+      operationId: deleteLabel
+      summary: Delete a user label (messages stay in All Mail; child labels are deleted too).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/mail/labels/{id}:empty:
+    post:
+      tags: [labels]
+      operationId: emptyLabel
+      summary: Permanently delete every message in `TRASH` or `SPAM` ("Empty now").
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [TRASH, SPAM]
+      responses:
+        '202':
+          description: Purge job queued.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------------------- sync
+  /api/mail/changes:
+    get:
+      tags: [sync]
+      operationId: getChanges
+      summary: Delta since a modseq (shared change log with IMAP CONDSTORE).
+      description: |
+        Returns changes with `modseq > since`, oldest first, up to `limit` threads. When `hasMore` is true,
+        call again with `since = cursor`. A `since` older than the expunge-log retention → `410 common.cursor_expired`
+        (client does a full refetch).
+      parameters:
+        - name: since
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 200
+      responses:
+        '200':
+          description: Delta.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '410':
+          $ref: '#/components/responses/CursorExpired'
+
+  /api/mail/events:
+    get:
+      tags: [sync]
+      operationId: streamEvents
+      summary: Server-Sent Events change feed for the caller's mailbox.
+      description: |
+        `text/event-stream`. Heartbeat comment (`:`) every 25 s. Reconnect with `Last-Event-ID` to receive
+        the latest cursor you missed. Each event:
+        ```
+        id: <modseq>
+        event: mailbox
+        data: {"topic":"mailbox","cursor":"1234"}
+        ```
+        `event: session` with `{"topic":"session","reason":"revoked"}` tells the client to sign out.
+        Browsers can't set headers on `EventSource`; the token may be passed as `?access_token=` (fetch-based SSE preferred).
+      parameters:
+        - $ref: '#/components/parameters/LastEventId'
+        - name: access_token
+          in: query
+          description: Bearer token for clients that cannot send `Authorization` (EventSource).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE stream; each `data:` line is a `RealtimeNotification` JSON object.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  # ---------------------------------------------------------------- settings
+  /api/mail/settings:
+    get:
+      tags: [settings]
+      operationId: getSettings
+      summary: Mail settings.
+      responses:
+        '200':
+          description: Settings.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailSettings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      tags: [settings]
+      operationId: putSettings
+      summary: Replace mail settings.
+      parameters:
+        - $ref: '#/components/parameters/IfMatchRequired'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MailSettingsInput'
+      responses:
+        '200':
+          description: Saved.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailSettings'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: '`mail.forwarding.unverified_address`.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+
+  /api/mail/identities:
+    get:
+      tags: [settings]
+      operationId: listIdentities
+      summary: Addresses the user may send as (primary, aliases, groups with send-as).
+      responses:
+        '200':
+          description: Identities; the primary address first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdentityList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/mail/forwarding-addresses:
+    get:
+      tags: [settings]
+      operationId: listForwardingAddresses
+      summary: Forwarding targets and their verification state.
+      responses:
+        '200':
+          description: Addresses.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForwardingAddressList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [settings]
+      operationId: addForwardingAddress
+      summary: Add a forwarding target; a verification code is emailed to it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address]
+              additionalProperties: false
+              properties:
+                address:
+                  type: string
+                  format: email
+      responses:
+        '201':
+          description: Added (pending verification).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForwardingAddress'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/mail/forwarding-addresses/{id}:
+    delete:
+      tags: [settings]
+      operationId: removeForwardingAddress
+      summary: Remove a forwarding target (forwarding and filters using it are disabled).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Removed.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/mail/forwarding-addresses/{id}:verify:
+    post:
+      tags: [settings]
+      operationId: verifyForwardingAddress
+      summary: Confirm a forwarding target with the emailed code.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              additionalProperties: false
+              properties:
+                code:
+                  type: string
+                  maxLength: 32
+      responses:
+        '200':
+          description: Verified.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForwardingAddress'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/mail/filters:
+    get:
+      tags: [settings]
+      operationId: listFilters
+      summary: Filters ordered by `position`.
+      responses:
+        '200':
+          description: Filters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FilterList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [settings]
+      operationId: createFilter
+      summary: Create a filter (appended unless `position` is given).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FilterInput'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Filter'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: '`mail.forwarding.unverified_address`.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /api/mail/filters/{id}:
+    put:
+      tags: [settings]
+      operationId: replaceFilter
+      summary: Replace a filter (including its `position` for reordering).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FilterInput'
+      responses:
+        '200':
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Filter'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [settings]
+      operationId: deleteFilter
+      summary: Delete a filter.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------------------- contacts
+  /api/mail/contacts/suggest:
+    get:
+      tags: [contacts]
+      operationId: suggestContacts
+      summary: Recipient autocomplete (org directory + groups + recent correspondents).
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 25
+            default: 8
+      responses:
+        '200':
+          description: Suggestions, best match first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContactSuggestionList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/mail/image-proxy:
+    get:
+      tags: [messages]
+      operationId: proxyImage
+      summary: Fetch a remote image on behalf of the client (URLs are produced by the sanitizer, HMAC-signed).
+      parameters:
+        - name: u
+          in: query
+          required: true
+          description: Remote URL.
+          schema:
+            type: string
+        - name: s
+          in: query
+          required: true
+          description: Signature over `u` (prevents open-proxy abuse).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Image bytes (only `image/*`; max 10 MB).
+          content:
+            image/*:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          description: Upstream fetch failed.
+
+  # ---------------------------------------------------------------- admin
+  /api/mail/admin/domains/{domain}/dns:
+    get:
+      tags: [admin]
+      operationId: adminGetDomainDns
+      summary: Required DNS records for a domain (MX, SPF, DKIM, DMARC, autodiscovery) with live check results.
+      description: Permission `mail.admin.dkim.manage` or `mail.admin.routing.manage`.
+      parameters:
+        - name: domain
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: check
+          in: query
+          description: When true, run live DNS lookups now (otherwise return the last cached check).
+          schema:
+            type: boolean
+            default: true
+      responses:
+        '200':
+          description: DNS report.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DnsReport'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/mail/admin/queue:
+    get:
+      tags: [admin]
+      operationId: adminListQueue
+      summary: Outbound delivery queue (permission `mail.admin.queue.read`).
+      parameters:
+        - name: state
+          in: query
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/DeliveryState'
+          style: form
+          explode: false
+        - name: domain
+          in: query
+          description: Recipient domain.
+          schema:
+            type: string
+        - name: sender
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Page of deliveries, oldest pending first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueuePage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/mail/admin/queue/{id}:retry:
+    post:
+      tags: [admin]
+      operationId: adminRetryDelivery
+      summary: Retry a deferred delivery now (permission `mail.admin.queue.manage`).
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Rescheduled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueItem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: '`mail.queue.not_retryable` (already delivered or failed).'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /api/mail/admin/domains/{domain}/dkim:
+    get:
+      tags: [admin]
+      operationId: adminListDkimKeys
+      summary: DKIM keys of a domain (permission `mail.admin.dkim.manage`).
+      description: |
+        Every key with its selector, algorithm, lifecycle status (`pending_dns` → `active` → `retired`) and the
+        TXT record to publish. Private keys are never returned.
+      parameters:
+        - $ref: '#/components/parameters/Domain'
+      responses:
+        '200':
+          description: Keys of the domain.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DkimKeyList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/mail/admin/domains/{domain}/dkim:rotate:
+    post:
+      tags: [admin]
+      operationId: adminRotateDkim
+      summary: Start a DKIM key rotation (permission `mail.admin.dkim.manage`).
+      description: |
+        Creates a new RSA-2048 + ed25519 key pair on the next selectors, in `pending_dns`. The current keys keep
+        signing; the new keys become `active` once their TXT records are found. Retire the old selectors afterwards.
+        Audited as `mail.dkim.rotate`.
+      parameters:
+        - $ref: '#/components/parameters/Domain'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: The new keys (publish their `dnsName` / `dnsValue`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DkimKeyList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: '`common.unavailable`: no master key is configured, so keys cannot be sealed.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /api/mail/admin/domains/{domain}/dkim/{selector}:retire:
+    post:
+      tags: [admin]
+      operationId: adminRetireDkimKey
+      summary: Retire a DKIM key (permission `mail.admin.dkim.manage`).
+      description: The key stops signing immediately; its TXT record can be removed after a few days. Retiring a retired key is a no-op. Audited as `mail.dkim.retire`.
+      parameters:
+        - $ref: '#/components/parameters/Domain'
+        - name: selector
+          in: path
+          required: true
+          schema:
+            type: string
+            examples: [sh1]
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Retired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DkimKey'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/mail/admin/outbound-routing:
+    get:
+      tags: [admin]
+      operationId: adminGetOutboundRouting
+      summary: The org's outbound routing (DirectMX or smarthost; permission `mail.admin.routing.manage`).
+      description: |
+        `version` 0 means the org never saved routing (defaults shown). `effectiveMode` is what the server actually
+        does: `local-only` when the server runs with `SH_OUTBOUND_MODE=local-only` (development), regardless of `mode`.
+      responses:
+        '200':
+          description: Routing.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutboundRouting'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    put:
+      tags: [admin]
+      operationId: adminPutOutboundRouting
+      summary: Replace the org's outbound routing (permission `mail.admin.routing.manage`).
+      description: |
+        `If-Match` is the `ETag` from GET (`"0"` the first time). The smarthost password is write-only and sealed with
+        the server's master key: omit it to keep the stored one, send `""` to clear it. Audited as `mail.routing.update`.
+      parameters:
+        - $ref: '#/components/parameters/IfMatchRequired'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OutboundRoutingInput'
+      responses:
+        '200':
+          description: Saved.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutboundRouting'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+        '503':
+          description: '`common.unavailable`: a password was given but no master key is configured.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: ES256 access token from Auth; `aud` must include `mail`.
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Domain:
+      name: domain
+      in: path
+      required: true
+      description: A domain of the caller's org (case-insensitive).
+      schema:
+        type: string
+        examples: [example.com]
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque cursor from a previous page's `nextCursor`.
+      schema:
+        type: string
+        maxLength: 1024
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+    Disposition:
+      name: disposition
+      in: query
+      schema:
+        type: string
+        enum: [inline, attachment]
+        default: attachment
+    IfMatch:
+      name: If-Match
+      in: header
+      description: '`"<version>"`; optional here, enforced when sent.'
+      schema:
+        type: string
+    IfMatchRequired:
+      name: If-Match
+      in: header
+      required: true
+      description: '`"<version>"` from the resource''s `ETag`.'
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: Client-generated unique key; replays return the first response for 24 h.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 255
+    IdempotencyKeyRequired:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Client-generated unique key (UUID); a duplicate returns the first result.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 255
+    LastEventId:
+      name: Last-Event-ID
+      in: header
+      schema:
+        type: string
+
+  headers:
+    ETag:
+      description: '`"<version>"` of the returned resource.'
+      schema:
+        type: string
+    Location:
+      description: URL of the created resource or redirect target.
+      schema:
+        type: string
+    RetryAfter:
+      description: Seconds until retry.
+      schema:
+        type: integer
+    UploadOffset:
+      description: Bytes received so far.
+      schema:
+        type: integer
+        format: int64
+    UploadLength:
+      description: Total upload size.
+      schema:
+        type: integer
+        format: int64
+
+  responses:
+    BadRequest:
+      description: Malformed request or validation failure (`common.validation_failed` with `fields`; `mail.search.invalid_query`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Missing/invalid/expired token (`common.unauthenticated`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: Not allowed (`common.forbidden`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: Not found (also other mailboxes' / tenants' ids).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: State conflict; see `code`.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PreconditionFailed:
+      description: Stale `If-Match` (`common.precondition_failed`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PreconditionRequired:
+      description: '`If-Match` missing (`common.precondition_required`).'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    IdempotencyKeyRequired:
+      description: '`Idempotency-Key` missing (`common.idempotency_key_required`).'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    IdempotencyMismatch:
+      description: Same `Idempotency-Key` with a different body (`common.idempotency_key_reused`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PayloadTooLarge:
+      description: Too large (`mail.upload.too_large` / `common.payload_too_large`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    QuotaExceeded:
+      description: Mailbox quota exceeded (`mail.quota_exceeded`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    CursorExpired:
+      description: '`since` is older than the change-log retention (`common.cursor_expired`); do a full refetch.'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    TooManyRequests:
+      description: Rate limit or daily recipient quota (`common.rate_limited`, `mail.daily_recipient_limit`).
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+  schemas:
+    # ------------------------------------------------------------ common
+    Problem:
+      type: object
+      description: RFC 9457 problem details.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          description: Stable machine-readable code; see `ErrorCode`.
+          examples: [mail.quota_exceeded]
+        fields:
+          type: object
+          description: 'Validation details: field name (JSON pointer for nested fields) to reason code.'
+          additionalProperties:
+            type: string
+        requestId:
+          type: string
+        retryAfterSeconds:
+          type: integer
+    ErrorCode:
+      type: string
+      description: Known `Problem.code` values for this service (common + mail).
+      enum:
+        - common.invalid_json
+        - common.validation_failed
+        - common.unauthenticated
+        - common.forbidden
+        - common.not_found
+        - common.conflict
+        - common.precondition_failed
+        - common.precondition_required
+        - common.idempotency_key_required
+        - common.idempotency_key_reused
+        - common.rate_limited
+        - common.payload_too_large
+        - common.unsupported_media_type
+        - common.cursor_expired
+        - common.internal
+        - common.unavailable
+        - mail.quota_exceeded
+        - mail.send_as_forbidden
+        - mail.daily_recipient_limit
+        - mail.recipients.too_many
+        - mail.recipient.invalid
+        - mail.draft.no_recipients
+        - mail.undo_window_expired
+        - mail.upload.incomplete
+        - mail.upload.too_large
+        - mail.upload.offset_mismatch
+        - mail.upload.expired
+        - mail.label.name_taken
+        - mail.label.system_immutable
+        - mail.label.invalid_parent
+        - mail.label.unknown
+        - mail.forwarding.unverified_address
+        - mail.forwarding.invalid_code
+        - mail.filter.invalid
+        - mail.search.invalid_query
+        - mail.queue.not_retryable
+    Page:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        nextCursor:
+          type: [string, 'null']
+    Timestamp:
+      type: string
+      format: date-time
+      description: RFC 3339, UTC.
+    RealtimeNotification:
+      type: object
+      description: SSE payload — "something changed" + cursor, never data.
+      required: [topic, cursor]
+      properties:
+        topic:
+          type: string
+          enum: [mailbox, session]
+        cursor:
+          type: string
+          description: Mailbox modseq (decimal string) for `mailbox`.
+        reason:
+          type: string
+          description: For `session` (`revoked`).
+    EmailAddress:
+      type: object
+      required: [address]
+      properties:
+        name:
+          type: [string, 'null']
+        address:
+          type: string
+          description: RFC 5321 address (SMTPUTF8 allowed).
+    SystemLabel:
+      type: string
+      enum: [INBOX, SENT, DRAFTS, TRASH, SPAM, STARRED, IMPORTANT]
+    MessageFlags:
+      type: object
+      required: [seen, flagged, answered, draft, forwarded]
+      properties:
+        seen:
+          type: boolean
+        flagged:
+          type: boolean
+        answered:
+          type: boolean
+        draft:
+          type: boolean
+        forwarded:
+          type: boolean
+
+    # ------------------------------------------------------------ threads
+    Participant:
+      type: object
+      required: [address, isMe, unread]
+      properties:
+        name:
+          type: [string, 'null']
+        address:
+          type: string
+        isMe:
+          type: boolean
+          description: Rendered as "me".
+        unread:
+          type: boolean
+          description: True if this participant sent an unread message (bold in the list).
+    ThreadSummary:
+      type: object
+      required: [id, subject, snippet, participants, messageCount, unreadCount, labelIds, lastMessageAt, hasAttachments, starred, important, modseq]
+      properties:
+        id:
+          type: string
+          format: uuid
+        subject:
+          type: string
+        snippet:
+          type: string
+        participants:
+          type: array
+          description: Senders in conversation order (deduplicated).
+          items:
+            $ref: '#/components/schemas/Participant'
+        messageCount:
+          type: integer
+        unreadCount:
+          type: integer
+        labelIds:
+          type: array
+          description: Union of labels across the thread's messages (system role names for system labels).
+          items:
+            type: string
+        lastMessageAt:
+          $ref: '#/components/schemas/Timestamp'
+        hasAttachments:
+          type: boolean
+        starred:
+          type: boolean
+        important:
+          type: boolean
+        hasCalendarInvite:
+          type: boolean
+        modseq:
+          type: string
+          description: Highest modseq of the thread (decimal string; int64).
+    ThreadPage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ThreadSummary'
+            totalEstimate:
+              type: [integer, 'null']
+              description: Approximate total for "1–50 of 1,204" (null when unknown).
+    Thread:
+      type: object
+      required: [id, subject, labelIds, messages, modseq]
+      properties:
+        id:
+          type: string
+          format: uuid
+        subject:
+          type: string
+        labelIds:
+          type: array
+          items:
+            type: string
+        messages:
+          type: array
+          description: Oldest first. Trashed messages are omitted unless viewing Trash.
+          items:
+            $ref: '#/components/schemas/Message'
+        modseq:
+          type: string
+
+    # ------------------------------------------------------------ messages
+    SpfResult:
+      type: string
+      enum: [pass, fail, softfail, neutral, none, temperror, permerror]
+    DkimResult:
+      type: string
+      enum: [pass, fail, none, policy, neutral, temperror, permerror]
+    DmarcResult:
+      type: string
+      enum: [pass, fail, none, temperror, permerror]
+    AuthResults:
+      type: object
+      required: [spf, dkim, dmarc]
+      properties:
+        spf:
+          $ref: '#/components/schemas/SpfResult'
+        dkim:
+          $ref: '#/components/schemas/DkimResult'
+        dmarc:
+          $ref: '#/components/schemas/DmarcResult'
+        dmarcPolicy:
+          type: [string, 'null']
+          enum: [none, quarantine, reject, null]
+    SecurityWarning:
+      type: string
+      description: Banner to show above the message (`none` = no banner).
+      enum: [none, dmarc_fail, spoof_suspected, spam, virus_removed]
+    MessageBody:
+      type: object
+      required: [remoteImagesBlocked, remoteImageCount]
+      properties:
+        html:
+          type: [string, 'null']
+          description: Server-sanitized HTML; render only inside the sandboxed `SafeHtml` iframe.
+        text:
+          type: [string, 'null']
+          description: Plain text (present when the message has no HTML part).
+        remoteImagesBlocked:
+          type: boolean
+        remoteImageCount:
+          type: integer
+    Attachment:
+      type: object
+      required: [partPath, filename, contentType, size, inline]
+      properties:
+        partPath:
+          type: string
+          description: Use with `GET /api/mail/messages/{id}/parts/{path}`.
+        filename:
+          type: string
+        contentType:
+          type: string
+        size:
+          type: integer
+          format: int64
+        inline:
+          type: boolean
+        contentId:
+          type: [string, 'null']
+    CalendarPartSummary:
+      type: object
+      description: Present when the message carries a `text/calendar` part (invite card).
+      required: [partPath, method, icalUid]
+      properties:
+        partPath:
+          type: string
+        method:
+          type: string
+          enum: [REQUEST, REPLY, CANCEL, COUNTER, PUBLISH]
+        icalUid:
+          type: string
+          description: Look up the calendar copy with `GET /api/calendar/event-lookup?icalUid=`.
+        sequence:
+          type: integer
+        summary:
+          type: [string, 'null']
+        start:
+          type: [string, 'null']
+          format: date-time
+        end:
+          type: [string, 'null']
+          format: date-time
+        allDay:
+          type: boolean
+        organizer:
+          oneOf:
+            - $ref: '#/components/schemas/EmailAddress'
+            - type: 'null'
+        attendeeCount:
+          type: integer
+    DeliveryState:
+      type: string
+      enum: [queued, sending, deferred, delivered, failed, cancelled]
+    RecipientDelivery:
+      type: object
+      required: [address, state, updatedAt]
+      properties:
+        address:
+          type: string
+        state:
+          $ref: '#/components/schemas/DeliveryState'
+        local:
+          type: boolean
+          description: Delivered inside this Suitehive install.
+        lastResponse:
+          type: [string, 'null']
+          description: Last SMTP response (e.g. `250 2.0.0 OK`).
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+    Message:
+      type: object
+      required: [id, threadId, from, to, cc, replyTo, subject, snippet, receivedAt, size, hasAttachments, labelIds, flags, keywords, attachments, securityWarning]
+      properties:
+        id:
+          type: string
+          format: uuid
+        threadId:
+          type: string
+          format: uuid
+        messageIdHeader:
+          type: [string, 'null']
+        inReplyTo:
+          type: [string, 'null']
+        references:
+          type: array
+          items:
+            type: string
+        from:
+          $ref: '#/components/schemas/EmailAddress'
+        sender:
+          oneOf:
+            - $ref: '#/components/schemas/EmailAddress'
+            - type: 'null'
+        to:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+        cc:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+        bcc:
+          type: array
+          description: Only on messages the user sent.
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+        replyTo:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+        subject:
+          type: string
+        snippet:
+          type: string
+        sentAt:
+          type: [string, 'null']
+          format: date-time
+          description: Date header.
+        receivedAt:
+          $ref: '#/components/schemas/Timestamp'
+        size:
+          type: integer
+          format: int64
+        hasAttachments:
+          type: boolean
+        labelIds:
+          type: array
+          items:
+            type: string
+        flags:
+          $ref: '#/components/schemas/MessageFlags'
+        keywords:
+          type: array
+          items:
+            type: string
+        body:
+          $ref: '#/components/schemas/MessageBody'
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Attachment'
+        calendar:
+          oneOf:
+            - $ref: '#/components/schemas/CalendarPartSummary'
+            - type: 'null'
+        authResults:
+          oneOf:
+            - $ref: '#/components/schemas/AuthResults'
+            - type: 'null'
+        spamScore:
+          type: [number, 'null']
+        securityWarning:
+          $ref: '#/components/schemas/SecurityWarning'
+        listUnsubscribe:
+          type: [string, 'null']
+          description: List-Unsubscribe target (mailto/https), if present.
+        deliveries:
+          type: array
+          description: Per-recipient delivery state (messages the user sent only).
+          items:
+            $ref: '#/components/schemas/RecipientDelivery'
+        undoSendUntil:
+          type: [string, 'null']
+          format: date-time
+          description: While set and in the future, `:undoSend` is possible.
+    ModifyRequest:
+      type: object
+      required: [ids]
+      additionalProperties: false
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items:
+            type: string
+            format: uuid
+        addLabelIds:
+          type: array
+          items:
+            type: string
+        removeLabelIds:
+          type: array
+          items:
+            type: string
+        seen:
+          type: boolean
+          description: Set/clear `\Seen`.
+        flagged:
+          type: boolean
+          description: Set/clear `\Flagged` (same as STARRED).
+    ModifyResult:
+      type: object
+      required: [modseq, updatedIds]
+      properties:
+        modseq:
+          type: string
+        updatedIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    # ------------------------------------------------------------ compose
+    DraftAttachmentRef:
+      type: object
+      description: Either a finished upload (`uploadId`) or a part of an existing message (`fromMessageId` + `partPath`, for forwards).
+      properties:
+        uploadId:
+          type: string
+          format: uuid
+        fromMessageId:
+          type: string
+          format: uuid
+        partPath:
+          type: string
+        inline:
+          type: boolean
+          default: false
+        contentId:
+          type: string
+          description: For inline images referenced as `cid:` in the HTML body.
+    DraftAttachment:
+      type: object
+      required: [filename, contentType, size, inline, ready]
+      properties:
+        uploadId:
+          type: [string, 'null']
+          format: uuid
+        fromMessageId:
+          type: [string, 'null']
+          format: uuid
+        partPath:
+          type: [string, 'null']
+        filename:
+          type: string
+        contentType:
+          type: string
+        size:
+          type: integer
+          format: int64
+        inline:
+          type: boolean
+        contentId:
+          type: [string, 'null']
+        ready:
+          type: boolean
+          description: False while the upload is still in progress (send is blocked).
+    ComposeMode:
+      type: string
+      enum: [new, reply, reply_all, forward]
+    Composition:
+      type: object
+      description: Message content as edited in compose.
+      additionalProperties: false
+      properties:
+        from:
+          type: string
+          description: Send-as address (one of `GET /identities`); defaults to the primary address.
+        to:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+        cc:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+        bcc:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+        subject:
+          type: string
+          maxLength: 998
+        html:
+          type: string
+          description: Rich-text body (sanitized server-side before sending).
+        text:
+          type: string
+          description: Plain-text body; derived from `html` when omitted.
+        mode:
+          $ref: '#/components/schemas/ComposeMode'
+        replyToMessageId:
+          type: string
+          format: uuid
+          description: For reply/reply_all/forward; sets threading headers.
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/DraftAttachmentRef'
+    DraftInput:
+      $ref: '#/components/schemas/Composition'
+    Draft:
+      type: object
+      required: [id, mode, to, cc, bcc, subject, html, attachments, version, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        messageId:
+          type: [string, 'null']
+          format: uuid
+          description: The DRAFTS-labelled message backing this draft (IMAP visible).
+        threadId:
+          type: [string, 'null']
+          format: uuid
+        mode:
+          $ref: '#/components/schemas/ComposeMode'
+        replyToMessageId:
+          type: [string, 'null']
+          format: uuid
+        from:
+          type: [string, 'null']
+        to:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+        cc:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+        bcc:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAddress'
+        subject:
+          type: string
+        html:
+          type: string
+        text:
+          type: [string, 'null']
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/DraftAttachment'
+        version:
+          type: integer
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+    SendResult:
+      type: object
+      required: [messageId, threadId, undoUntil]
+      properties:
+        messageId:
+          type: string
+          format: uuid
+          description: Id of the SENT copy; use with `:undoSend`.
+        threadId:
+          type: string
+          format: uuid
+        undoUntil:
+          $ref: '#/components/schemas/Timestamp'
+    Upload:
+      type: object
+      required: [id, filename, contentType, size, receivedBytes, status, expiresAt, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        contentType:
+          type: string
+        size:
+          type: integer
+          format: int64
+        receivedBytes:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum: [pending, complete]
+        expiresAt:
+          $ref: '#/components/schemas/Timestamp'
+          description: Unattached uploads are removed after this time.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+
+    # ------------------------------------------------------------ labels
+    Label:
+      type: object
+      required: [id, name, kind, hidden, unreadCount, threadCount]
+      properties:
+        id:
+          type: string
+          description: UUID for user labels; the role name (`INBOX`, …) for system labels.
+        name:
+          type: string
+          description: Full path for nested labels (`Work/ClientA`).
+        kind:
+          type: string
+          enum: [system, user]
+        systemRole:
+          oneOf:
+            - $ref: '#/components/schemas/SystemLabel'
+            - type: 'null'
+        parentId:
+          type: [string, 'null']
+        color:
+          oneOf:
+            - $ref: '#/components/schemas/LabelColor'
+            - type: 'null'
+        hidden:
+          type: boolean
+          description: Hidden from the sidebar ("More").
+        unreadCount:
+          type: integer
+          description: Unread threads.
+        threadCount:
+          type: integer
+    LabelColor:
+      type: string
+      description: Pastel palette key from the design system.
+      enum: [lilac, sky, mint, lime, sun, peach, rose, sand, slate, forest]
+    LabelList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Label'
+    LabelInput:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 225
+        parentId:
+          type: [string, 'null']
+          format: uuid
+        color:
+          $ref: '#/components/schemas/LabelColor'
+        hidden:
+          type: boolean
+          default: false
+    LabelPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 225
+        parentId:
+          type: [string, 'null']
+          format: uuid
+        color:
+          oneOf:
+            - $ref: '#/components/schemas/LabelColor'
+            - type: 'null'
+        hidden:
+          type: boolean
+
+    # ------------------------------------------------------------ sync
+    MessageChange:
+      type: object
+      required: [id, threadId, labelIds, flags, modseq]
+      properties:
+        id:
+          type: string
+          format: uuid
+        threadId:
+          type: string
+          format: uuid
+        labelIds:
+          type: array
+          items:
+            type: string
+        flags:
+          $ref: '#/components/schemas/MessageFlags'
+        modseq:
+          type: string
+    ChangesResponse:
+      type: object
+      required: [since, cursor, hasMore, threads, messages, labelsChanged]
+      properties:
+        since:
+          type: string
+        cursor:
+          type: string
+          description: New high-water modseq; pass as `since` next time.
+        hasMore:
+          type: boolean
+        threads:
+          type: object
+          required: [updated, removed]
+          properties:
+            updated:
+              type: array
+              description: Created or changed threads, as summaries ready to patch list caches.
+              items:
+                $ref: '#/components/schemas/ThreadSummary'
+            removed:
+              type: array
+              description: Threads that no longer exist (all messages permanently deleted).
+              items:
+                type: string
+                format: uuid
+        messages:
+          type: object
+          required: [updated, removed]
+          properties:
+            updated:
+              type: array
+              items:
+                $ref: '#/components/schemas/MessageChange'
+            removed:
+              type: array
+              items:
+                type: string
+                format: uuid
+        labelsChanged:
+          type: boolean
+          description: Label set or counts changed; refetch `GET /labels`.
+
+    # ------------------------------------------------------------ settings
+    ReadingPane:
+      type: string
+      enum: [right, below, off]
+    MailPrefs:
+      type: object
+      properties:
+        readingPane:
+          $ref: '#/components/schemas/ReadingPane'
+        density:
+          type: string
+          enum: [comfortable, compact]
+        markReadBehavior:
+          type: string
+          enum: [immediately, after_delay, manual]
+        undoSendSeconds:
+          type: integer
+          enum: [0, 5, 10, 20, 30]
+          default: 10
+        readingFont:
+          type: string
+          enum: [sans, serif]
+        keyboardShortcuts:
+          type: boolean
+          default: true
+        externalImages:
+          type: string
+          enum: [ask, always]
+          default: ask
+        alwaysShowImagesFrom:
+          type: array
+          items:
+            type: string
+        categoriesEnabled:
+          type: boolean
+          default: false
+        swipeLeftAction:
+          type: string
+          enum: [archive, trash, mark_read, none]
+          default: none
+        swipeRightAction:
+          type: string
+          enum: [archive, trash, mark_read, none]
+          default: archive
+    Signature:
+      type: object
+      required: [html, useForNew, useForReplies]
+      properties:
+        html:
+          type: string
+          maxLength: 10000
+        useForNew:
+          type: boolean
+        useForReplies:
+          type: boolean
+    Vacation:
+      type: object
+      required: [enabled, subject, html, contactsOnly, orgOnly]
+      properties:
+        enabled:
+          type: boolean
+        startAt:
+          type: [string, 'null']
+          format: date-time
+        endAt:
+          type: [string, 'null']
+          format: date-time
+        subject:
+          type: string
+          maxLength: 998
+        html:
+          type: string
+          maxLength: 20000
+        contactsOnly:
+          type: boolean
+          description: Reply only to people in recent correspondents.
+        orgOnly:
+          type: boolean
+          description: Reply only to senders in the same org.
+    Forwarding:
+      type: object
+      required: [enabled, keepCopy]
+      properties:
+        enabled:
+          type: boolean
+        address:
+          type: [string, 'null']
+          description: Must be a verified forwarding address.
+        keepCopy:
+          type: string
+          enum: [keep, mark_read, archive, trash]
+    MailSettingsInput:
+      type: object
+      required: [signature, vacation, forwarding, prefs]
+      additionalProperties: false
+      properties:
+        signature:
+          $ref: '#/components/schemas/Signature'
+        vacation:
+          $ref: '#/components/schemas/Vacation'
+        forwarding:
+          $ref: '#/components/schemas/Forwarding'
+        prefs:
+          $ref: '#/components/schemas/MailPrefs'
+    MailSettings:
+      allOf:
+        - $ref: '#/components/schemas/MailSettingsInput'
+        - type: object
+          required: [version, quotaBytes, usedBytes, clientSetup]
+          properties:
+            version:
+              type: integer
+            quotaBytes:
+              type: integer
+              format: int64
+            usedBytes:
+              type: integer
+              format: int64
+            clientSetup:
+              $ref: '#/components/schemas/MailClientSetup'
+    MailClientSetup:
+      type: object
+      description: Values for the "Mail apps" settings tab.
+      required: [username, imap, smtp]
+      properties:
+        username:
+          type: string
+        imap:
+          $ref: '#/components/schemas/ServerEndpoint'
+        smtp:
+          $ref: '#/components/schemas/ServerEndpoint'
+    ServerEndpoint:
+      type: object
+      required: [host, port, security]
+      properties:
+        host:
+          type: string
+        port:
+          type: integer
+        security:
+          type: string
+          enum: [tls, starttls]
+    Identity:
+      type: object
+      required: [address, displayName, kind, isPrimary]
+      properties:
+        address:
+          type: string
+        displayName:
+          type: string
+        kind:
+          type: string
+          enum: [primary, alias, group]
+        isPrimary:
+          type: boolean
+    IdentityList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Identity'
+    ForwardingAddress:
+      type: object
+      required: [id, address, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        address:
+          type: string
+        status:
+          type: string
+          enum: [pending, verified]
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+    ForwardingAddressList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ForwardingAddress'
+    FilterCriteria:
+      type: object
+      description: All given conditions are combined with `match` (all = AND, any = OR). At least one condition is required.
+      required: [match]
+      properties:
+        match:
+          type: string
+          enum: [all, any]
+        from:
+          type: string
+        to:
+          type: string
+        subject:
+          type: string
+        hasWords:
+          type: string
+        doesNotHave:
+          type: string
+        sizeComparison:
+          type: string
+          enum: [larger, smaller]
+        sizeBytes:
+          type: integer
+          format: int64
+        hasAttachment:
+          type: boolean
+    FilterActions:
+      type: object
+      description: At least one action is required.
+      properties:
+        addLabelIds:
+          type: array
+          items:
+            type: string
+        skipInbox:
+          type: boolean
+        markRead:
+          type: boolean
+        star:
+          type: boolean
+        forwardTo:
+          type: [string, 'null']
+          description: Must be a verified forwarding address.
+        trash:
+          type: boolean
+        neverSpam:
+          type: boolean
+    FilterInput:
+      type: object
+      required: [criteria, actions]
+      additionalProperties: false
+      properties:
+        criteria:
+          $ref: '#/components/schemas/FilterCriteria'
+        actions:
+          $ref: '#/components/schemas/FilterActions'
+        position:
+          type: integer
+          minimum: 0
+    Filter:
+      type: object
+      required: [id, position, criteria, actions, query]
+      properties:
+        id:
+          type: string
+          format: uuid
+        position:
+          type: integer
+        criteria:
+          $ref: '#/components/schemas/FilterCriteria'
+        actions:
+          $ref: '#/components/schemas/FilterActions'
+        query:
+          type: string
+          description: Equivalent search query (for "Preview matches").
+    FilterList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Filter'
+
+    # ------------------------------------------------------------ contacts
+    ContactSuggestion:
+      type: object
+      required: [address, kind, internal]
+      properties:
+        name:
+          type: [string, 'null']
+        address:
+          type: string
+        kind:
+          type: string
+          enum: [user, group, external]
+        internal:
+          type: boolean
+          description: In the same org (external recipients get an outlined chip).
+        userId:
+          type: [string, 'null']
+          format: uuid
+        groupId:
+          type: [string, 'null']
+          format: uuid
+        memberCount:
+          type: [integer, 'null']
+        avatarUrl:
+          type: [string, 'null']
+    ContactSuggestionList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ContactSuggestion'
+
+    # ------------------------------------------------------------ admin
+    DnsRecordCheck:
+      type: object
+      required: [purpose, type, name, expectedValue, status, foundValues]
+      properties:
+        purpose:
+          type: string
+          enum: [mx, spf, dkim, dmarc, mta_sts, tls_rpt, autodiscover_imap, autodiscover_submission, autoconfig, autodiscover, caldav]
+        type:
+          type: string
+          enum: [MX, TXT, CNAME, SRV]
+        name:
+          type: string
+        expectedValue:
+          type: string
+        priority:
+          type: [integer, 'null']
+        status:
+          type: string
+          enum: [ok, missing, mismatch, error]
+        foundValues:
+          type: array
+          items:
+            type: string
+        optional:
+          type: boolean
+        dkimSelector:
+          type: [string, 'null']
+        dkimStatus:
+          type: [string, 'null']
+          enum: [pending_dns, active, retired, null]
+    DnsReport:
+      type: object
+      required: [domain, records, checkedAt]
+      properties:
+        domain:
+          type: string
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/DnsRecordCheck'
+        checkedAt:
+          $ref: '#/components/schemas/Timestamp'
+    QueueItem:
+      type: object
+      required: [id, outboundId, envelopeFrom, rcptDomain, recipients, state, attempts, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Delivery id.
+        outboundId:
+          type: string
+          format: uuid
+        envelopeFrom:
+          type: string
+        senderUserId:
+          type: [string, 'null']
+          format: uuid
+        rcptDomain:
+          type: string
+        recipients:
+          type: array
+          items:
+            type: string
+        state:
+          $ref: '#/components/schemas/DeliveryState'
+        attempts:
+          type: integer
+        nextAttemptAt:
+          type: [string, 'null']
+          format: date-time
+        lastResponse:
+          type: [string, 'null']
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+    QueuePage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/QueueItem'
+    DkimKey:
+      type: object
+      description: A DKIM signing key (never the private key).
+      required: [id, domain, selector, algorithm, status, dnsName, dnsValue]
+      properties:
+        id:
+          type: string
+          format: uuid
+        domain:
+          type: string
+        selector:
+          type: string
+          examples: [sh1]
+        algorithm:
+          type: string
+          enum: [rsa-2048, ed25519]
+        status:
+          type: string
+          enum: [pending_dns, active, retired]
+        dnsName:
+          type: string
+          description: TXT record name, e.g. `sh1._domainkey.example.com`.
+        dnsValue:
+          type: string
+          description: TXT record value (`v=DKIM1; k=rsa; p=...`).
+    DkimKeyList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DkimKey'
+    OutboundRoutingMode:
+      type: string
+      description: '`direct` = deliver to the recipient MX (DirectMX); `smarthost` = relay through a provider.'
+      enum: [direct, smarthost]
+    SmarthostTls:
+      type: string
+      enum: [none, starttls, tls]
+    OutboundRouting:
+      type: object
+      required: [mode, smarthostHost, smarthostPort, smarthostTls, smarthostUsername, passwordSet, requireTls, effectiveMode, serverMode, version, updatedAt]
+      properties:
+        mode:
+          $ref: '#/components/schemas/OutboundRoutingMode'
+        smarthostHost:
+          type: [string, 'null']
+        smarthostPort:
+          type: [integer, 'null']
+        smarthostTls:
+          $ref: '#/components/schemas/SmarthostTls'
+        smarthostUsername:
+          type: [string, 'null']
+        passwordSet:
+          type: boolean
+          description: True when a smarthost password is stored (the password itself is never returned).
+        requireTls:
+          type: boolean
+          description: DirectMX only delivers over verified TLS (no plaintext fallback).
+        effectiveMode:
+          type: string
+          enum: [direct, smarthost, local-only]
+        serverMode:
+          type: string
+          description: The server's `SH_OUTBOUND_MODE`.
+          enum: [direct, smarthost, local-only]
+        version:
+          type: integer
+          description: 0 until the org saves routing for the first time.
+        updatedAt:
+          type: [string, 'null']
+          format: date-time
+    OutboundRoutingInput:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      properties:
+        mode:
+          $ref: '#/components/schemas/OutboundRoutingMode'
+        smarthostHost:
+          type: string
+          description: Required when `mode` is `smarthost`.
+          maxLength: 253
+        smarthostPort:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          default: 587
+        smarthostTls:
+          $ref: '#/components/schemas/SmarthostTls'
+        smarthostUsername:
+          type: string
+          maxLength: 320
+        smarthostPassword:
+          type: string
+          writeOnly: true
+          description: Omit to keep the stored password; an empty string clears it.
+          maxLength: 1024
+        requireTls:
+          type: boolean
+          default: false
